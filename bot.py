@@ -303,7 +303,7 @@ async def cc(ctx, *args):
         response_message = (
             f"{author_to_mention.mention} : "
             f"`{float_amount:,.2f} {source_currency_code.upper()}` "
-            f" = `{converted_amount:,.2f} {target_currency_code.upper()}`")
+            f" =  `{converted_amount:,.2f} {target_currency_code.upper()}`")
 
         await ctx.send(response_message,
                        reference=reply_reference,
