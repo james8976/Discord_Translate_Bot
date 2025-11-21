@@ -4,7 +4,8 @@ import json
 import discord
 import html
 import requests
-from discord.ext import commands, tasks
+import asyncio # 用於計時等待
+from discord.ext import commands
 from google.cloud import translate_v2 as translate
 from dotenv import load_dotenv
 from keep_alive import keep_alive
@@ -49,17 +50,12 @@ intents.message_content = True
 intents.reactions = True 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# --- 4. 定義常數 (完整版) ---
+# --- 4. 定義常數 ---
 LANGUAGE_ALIASES = {
-    'zh(tw)': 'zh-TW', 'tw': 'zh-TW', 'zh-tw': 'zh-TW',
-    'cn': 'zh-CN', 'zh-cn': 'zh-CN', 'zh': 'zh-CN',
-    'jp': 'ja', 'ja': 'ja',
-    'en': 'en',
-    'ko': 'ko', 'kr': 'ko',
-    'es': 'es', 'fr': 'fr', 'de': 'de', 'vi': 'vi',
-    'it': 'it', 'ru': 'ru', 'pt': 'pt', 'ar': 'ar',
-    'hi': 'hi', 'id': 'id', 'nl': 'nl', 'sv': 'sv',
-    'tr': 'tr', 'pl': 'pl'
+    'zh(tw)': 'zh-TW', 'tw': 'zh-TW', 'zh-tw': 'zh-TW', 'cn': 'zh-CN', 'zh-cn': 'zh-CN', 'zh': 'zh-CN',
+    'jp': 'ja', 'ja': 'ja', 'en': 'en', 'ko': 'ko', 'kr': 'ko', 'es': 'es', 'fr': 'fr',
+    'de': 'de', 'vi': 'vi', 'it': 'it', 'ru': 'ru', 'pt': 'pt', 'ar': 'ar', 'hi': 'hi', 'id': 'id',
+    'nl': 'nl', 'sv': 'sv', 'tr': 'tr', 'pl': 'pl'
 }
 CURRENCY_CODES = {'usd', 'eur', 'jpy', 'twd', 'cny', 'krw', 'gbp', 'aud', 'cad', 'chf', 'hkd', 'sgd', 'inr', 'rub'}
 EMOJI_TO_LANGUAGE = {
@@ -93,45 +89,51 @@ async def perform_currency_conversion(amount, source, target):
     except Exception as e:
         return None, str(e)
 
-# --- 6. 定時重啟任務 (每 24 小時觸發 Render 部署) ---
-@tasks.loop(hours=24)
-async def scheduled_redeploy():
+# --- 【修正後】背景維護任務 ---
+async def background_maintenance():
     await bot.wait_until_ready()
+    
     if not DEPLOY_HOOK_URL:
-        print("⚠️ 未設定 RENDER_DEPLOY_HOOK，無法執行自動重啟。")
+        print("⚠️ 未設定 RENDER_DEPLOY_HOOK，將不執行自動重啟。")
         return
-    print("⏰ 時間到！正在觸發 Render 重新部署...")
-    try:
-        requests.get(DEPLOY_HOOK_URL)
-        print("✅ 已發送重新部署請求。")
-    except Exception as e:
-        print(f"❌ 觸發重新部署失敗: {e}")
 
-# --- 7. 啟動事件 ---
+    while not bot.is_closed():
+        # 關鍵修正：先等待 24 小時 (86400秒)，再執行動作
+        print("⏰ 計時開始：機器人將在 24 小時後自動重新部署以保持健康...")
+        await asyncio.sleep(43200) 
+        
+        print("🚀 時間到！正在觸發 Render 重新部署...")
+        try:
+            requests.get(DEPLOY_HOOK_URL)
+            print("✅ 已發送重新部署請求。")
+            # 發送後等待一小段時間，避免重複觸發
+            await asyncio.sleep(600) 
+        except Exception as e:
+            print(f"❌ 觸發重新部署失敗: {e}")
+            # 如果失敗，等待 1 小時再試
+            await asyncio.sleep(3600)
+
+# --- 6. 啟動事件 ---
 @bot.event
 async def on_ready():
     print(f'✅ 機器人已登入為: {bot.user}')
-    if not scheduled_redeploy.is_running():
-        scheduled_redeploy.start()
-        print("✅ 自動維護任務已啟動")
+    
+    # 啟動背景任務
+    bot.loop.create_task(background_maintenance())
 
-# --- 8. 指令區 ---
+# --- 7. 指令區 (保持不變) ---
 @bot.command(name='cc')
 async def cc(ctx, *args):
     if not args: return
     src, tgt, amt_str = "jpy", "twd", "1.0"
-    
-    # 優化過的參數解析邏輯
     if len(args) == 1:
         if '-' in args[0]: parts = args[0].split('-'); src, tgt = parts[0], parts[1]
         else: amt_str = args[0]
     elif len(args) >= 2:
         if '-' in args[0]: parts = args[0].split('-'); src, tgt = parts[0], parts[1]; amt_str = args[1]
         elif '-' in args[1]: parts = args[1].split('-'); src, tgt = parts[0], parts[1]; amt_str = args[0]
-    
     try: amount = float(amt_str)
     except: await ctx.send("金額格式錯誤"); return
-
     res, err = await perform_currency_conversion(amount, src.upper(), tgt.upper())
     if err: await ctx.send(err)
     else:
@@ -143,17 +145,13 @@ async def cc(ctx, *args):
 async def tr(ctx, *args):
     if not args: return
     src, tgt, text_list = None, "zh-TW", list(args)
-    
-    # 優化過的參數解析邏輯
     if '-' in args[0] and not args[0].startswith('-'):
         parts = args[0].split('-')
         if len(parts) == 2:
             s, t = normalize_lang_code(parts[0]), normalize_lang_code(parts[1])
             if s and t: src, tgt, text_list = s, t, args[1:]
-    
     if not text_list: return
     res, err = await perform_translation(" ".join(text_list), tgt, src)
-    
     if err: await ctx.send(err)
     else:
         ref = ctx.message.reference
@@ -173,7 +171,7 @@ async def on_raw_reaction_add(payload):
         if not err: await ch.send(f"{msg.author.mention} : {res}", reference=msg, mention_author=False)
     except: pass
 
-# --- 9. 啟動 ---
+# --- 8. 啟動 ---
 try:
     keep_alive()
     bot.run(TOKEN)
