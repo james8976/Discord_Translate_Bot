@@ -20,17 +20,46 @@ if not CURRENCY_API_key:
     # 讓程式繼續運行,但在啟動時給予警告
     print("⚠️ 警告:找不到 CURRENCY_API_key。 !cc 匯率指令將無法運作。")
 
-# --- 2. 初始化 Google Cloud Translation ---
-try:
-    # 因為 Render 的 Start Command 已經幫我們產生了 credentials.json
-    # 所以這裡直接指定檔案路徑即可
-    os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = 'credentials.json'
-    translate_client = translate.Client()
-    print("✅ Google Cloud Translation API 認證成功！")
-except Exception as e:
-    print(f"❌ Google API 認證失敗：{e}")
-    translate_client = None
-    
+# --- 2. 初始化 Google Cloud Translation (Python 寫入版) ---
+import json
+
+# 嘗試從環境變數讀取 JSON 內容
+google_creds_content = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
+
+if google_creds_content:
+    try:
+        print("🔄 正在從環境變數建立 credentials.json 檔案...")
+        # 驗證內容是否為有效的 JSON (這步最關鍵，確保內容沒壞)
+        cred_dict = json.loads(google_creds_content) 
+        
+        # 將內容寫入檔案
+        with open('credentials.json', 'w', encoding='utf-8') as f:
+            json.dump(cred_dict, f) # 使用 json.dump 確保格式完美
+        print("✅ credentials.json 檔案建立成功。")
+        
+        # 設定環境變數指向這個新建立的檔案
+        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = 'credentials.json'
+        
+        # 初始化客戶端
+        translate_client = translate.Client()
+        print("✅ Google Cloud Translation API 認證成功！")
+        
+    except Exception as e:
+        print(f"❌ 建立 credentials.json 失敗: {e}")
+        translate_client = None
+else:
+    # 如果沒有環境變數，嘗試直接讀取本地檔案 (例如在筆電測試時)
+    if os.path.exists('credentials.json'):
+        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = 'credentials.json'
+        try:
+            translate_client = translate.Client()
+            print("✅ 使用本地 credentials.json 認證成功！")
+        except Exception as e:
+            print(f"❌ 本地檔案認證失敗: {e}")
+            translate_client = None
+    else:
+        print("⚠️ 警告：找不到 Google 憑證，翻譯功能將無法使用。")
+        translate_client = None
 
 # --- 3. 設定 Discord 機器人權限 (Intents) ---
 intents = discord.Intents.default()
