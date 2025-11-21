@@ -1,25 +1,24 @@
 # --- 0. 導入必要的函式庫 ---
 import os
-import sys # 【新增】用於執行 sys.exit(0)
-from keep_alive import keep_alive
 import json
 import discord
-import html  # 用於解碼 HTML 特殊字元 (例如 '&#39;')
+import html  # 用於解碼 HTML 特殊字元
 import requests  # 用於貨幣轉換的 HTTP 請求
-from discord.ext import commands, tasks # 【新增】導入 tasks 用於定時任務
+from discord.ext import commands
 from google.cloud import translate_v2 as translate
+from dotenv import load_dotenv
+from keep_alive import keep_alive  # 確保這行在
 
-# --- 1. 載入環境變數 (您的 Token) ---
+# --- 1. 載入環境變數 ---
+load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
-# 您的 .env 檔案中變數名稱是 'CURRENCY_API_key'
 CURRENCY_API_key = os.getenv('CURRENCY_API_key')
 
 if not TOKEN:
-    print("❌ 錯誤:找不到 DISCORD_TOKEN。請檢查您的 .env 檔案。")
+    print("❌ 錯誤: 找不到 DISCORD_TOKEN。請檢查您的 .env 檔案或 Render 環境變數。")
     exit()
 if not CURRENCY_API_key:
-    # 讓程式繼續運行,但在啟動時給予警告
-    print("⚠️ 警告:找不到 CURRENCY_API_key。 !cc 匯率指令將無法運作。")
+    print("⚠️ 警告: 找不到 CURRENCY_API_key。 !cc 匯率指令將無法運作。")
 
 # --- 2. 初始化 Google Cloud Translation (Python 寫入版) ---
 # 嘗試從環境變數讀取 JSON 內容
@@ -28,12 +27,12 @@ google_creds_content = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
 if google_creds_content:
     try:
         print("🔄 正在從環境變數建立 credentials.json 檔案...")
-        # 驗證內容是否為有效的 JSON (這步最關鍵，確保內容沒壞)
+        # 驗證內容是否為有效的 JSON
         cred_dict = json.loads(google_creds_content) 
         
         # 將內容寫入檔案
         with open('credentials.json', 'w', encoding='utf-8') as f:
-            json.dump(cred_dict, f) # 使用 json.dump 確保格式完美
+            json.dump(cred_dict, f)
         print("✅ credentials.json 檔案建立成功。")
         
         # 設定環境變數指向這個新建立的檔案
@@ -60,413 +59,171 @@ else:
         print("⚠️ 警告：找不到 Google 憑證，翻譯功能將無法使用。")
         translate_client = None
 
-# --- 3. 設定 Discord 機器人權限 (Intents) ---
+# --- 3. 設定 Discord 機器人權限 ---
 intents = discord.Intents.default()
-intents.message_content = True  # 允許讀取訊息內容 (給 !tr 和 !cc 指令用)
-intents.reactions = True  # 允許讀取表情符號反應
+intents.message_content = True  
+intents.reactions = True 
 
-# 設定指令前綴為 '!'
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # --- 4. 建立代碼別名與清單 ---
-
-# 語言代碼別名 (用於 !tr 指令)
 LANGUAGE_ALIASES = {
-    'zh(tw)': 'zh-TW',
-    'tw': 'zh-TW',
-    'zh-tw': 'zh-TW',
-    'cn': 'zh-CN',
-    'zh-cn': 'zh-CN',
-    'zh': 'zh-CN',
-    'jp': 'ja',
-    'ja': 'ja',
-    'en': 'en',
-    'ko': 'ko',
-    'kr': 'ko',
-    'es': 'es',
-    'fr': 'fr',
-    'de': 'de',
-    'vi': 'vi',
-    'it': 'it',
-    'ru': 'ru',
-    'pt': 'pt',
-    'ar': 'ar',
-    'hi': 'hi',
-    'id': 'id',
-    'nl': 'nl',
-    'sv': 'sv',
-    'ru': 'ru',
-    'tr': 'tr',
-    'pl': 'pl',
+    'zh(tw)': 'zh-TW', 'tw': 'zh-TW', 'zh-tw': 'zh-TW',
+    'cn': 'zh-CN', 'zh-cn': 'zh-CN', 'zh': 'zh-CN',
+    'jp': 'ja', 'ja': 'ja', 'en': 'en',
+    'ko': 'ko', 'kr': 'ko', 'es': 'es', 'fr': 'fr',
+    'de': 'de', 'vi': 'vi', 'it': 'it', 'ru': 'ru',
+    'pt': 'pt', 'ar': 'ar', 'hi': 'hi', 'id': 'id',
+    'nl': 'nl', 'sv': 'sv', 'tr': 'tr', 'pl': 'pl',
 }
 
-# 支援的貨幣代碼 (用於 !cc 指令)
-# 使用 set() 集合可以讓查詢速度更快 (O(1))
 CURRENCY_CODES = set([
     'usd', 'eur', 'jpy', 'twd', 'cny', 'krw', 'gbp', 'aud', 'cad', 'chf',
     'hkd', 'sgd', 'inr', 'rub'
-    # 您可以在此新增更多支援的貨幣代碼
 ])
 
-
 def normalize_lang_code(code: str) -> str | None:
-    """將 !tr 指令中的語言別名 (如 'jp') 轉換為標準代碼 (如 'ja')"""
-    if not code:
-        return None
+    if not code: return None
     return LANGUAGE_ALIASES.get(code.lower(), None)
 
-
-# --- 5. 建立表情符號 -> 語言的觸發器 ---
-# 用於表情符號翻譯功能
+# --- 5. 表情符號對應 ---
 EMOJI_TO_LANGUAGE = {
-    # --- 標準 Unicode 表情符號 (範例) ---
-    "🇹🇼": "zh-TW",  # 台灣 -> 繁中
-    "🇯🇵": "ja",  # 日本 -> 日文
-    "🇺🇸": "en",  # 美國 -> 英文
-    "🇰🇷": "ko",  # 韓國 -> 韓文
-    "🇨🇳": "zh-CN",  # 中國 -> 簡中
-    "🇪🇸": "es",  # 西班牙 -> 西班牙文
-    "🇫🇷": "fr",  # 法國 -> 法文
-
-    # --- 您自訂的表情符號 (範例) ---
-    # 'your_jp_emoji_name': 'ja',
+    "🇹🇼": "zh-TW", "🇯🇵": "ja", "🇺🇸": "en",
+    "🇰🇷": "ko", "🇨🇳": "zh-CN", "🇪🇸": "es", "🇫🇷": "fr",
 }
 
-
 # --- 6. 核心翻譯函式 ---
-async def perform_translation(
-        text_to_translate: str,
-        target_lang_code: str,
-        source_lang_code: str = None) -> tuple[str | None, str | None]:
-    """
-    執行翻譯。
-    :return: (translated_text, None) 成功時
-    :return: (None, error_message) 失敗時
-    """
+async def perform_translation(text, target, source=None):
     if not translate_client:
-        return None, "抱歉,翻譯服務 (Google API) 目前無法使用。"
-
+        return None, "抱歉, 翻譯服務 (Google API) 目前無法使用。"
     try:
         result = translate_client.translate(
-            text_to_translate,
-            target_language=target_lang_code,
-            source_language=source_lang_code  # 若為 None,Google 會自動偵測
+            text, target_language=target, source_language=source
         )
-        translated_text = html.unescape(result['translatedText'])
-        return translated_text, None
+        return html.unescape(result['translatedText']), None
     except Exception as e:
-        print(f"翻譯時發生錯誤: {e}")
-        return None, f"翻譯時發生錯誤。請確認您的語言代碼是否正確。\n錯誤訊息: `{e}`"
-
+        print(f"翻譯錯誤: {e}")
+        return None, f"翻譯錯誤: {e}"
 
 # --- 7. 核心匯率函式 ---
-async def perform_currency_conversion(
-        amount: float, source_currency: str,
-        target_currency: str) -> tuple[float | None, str | None]:
-    """
-    執行貨幣轉換。
-    :return: (converted_amount, None) 成功時
-    :return: (None, error_message) 失敗時
-    """
+async def perform_currency_conversion(amount, source, target):
     if not CURRENCY_API_key:
-        return None, "抱歉,匯率服務 (API Key) 尚未設定。"
-
-    # 使用 ExchangeRate-API 的 /pair 端點
-    request_str = f"https://v6.exchangerate-api.com/v6/{CURRENCY_API_key}/pair/{source_currency}/{target_currency}/{amount}"
-
+        return None, "抱歉, 匯率服務 (API Key) 尚未設定。"
+    
+    url = f"https://v6.exchangerate-api.com/v6/{CURRENCY_API_key}/pair/{source}/{target}/{amount}"
     try:
-        response = requests.get(request_str)
-        response.raise_for_status()  # 如果狀態碼不是 200 (例如 404, 500),會在此拋出錯誤
-        data = response.json()  # 自動解析 JSON
-
+        resp = requests.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+        
         if data.get('result') == 'success':
-            conversion_result = data.get("conversion_result")
-            if conversion_result is not None:
-                return float(conversion_result), None
-            else:
-                # 雖然 result 是 'success' 但沒有 'conversion_result',這不應該發生
-                return None, "API 回應中缺少 'conversion_result' 欄位。"
-        else:
-            # API 回應 'result' != 'success' (例如金鑰錯誤、貨幣代碼錯誤)
-            error_type = data.get('error-type', '未知錯誤')
-            return None, f"API 查詢失敗: {error_type}"
-
-    except requests.exceptions.HTTPError as http_err:
-        print(f"HTTP 錯誤: {http_err}")
-        return None, f"API 請求失敗,請檢查您的貨幣代碼是否正確。 ({http_err})"
+            return float(data['conversion_result']), None
+        return None, f"API 查詢失敗: {data.get('error-type', '未知錯誤')}"
     except Exception as e:
-        print(f"Error during exchange rate request: {e}")
-        return None, f"請求時發生網路錯誤: {e}"
+        return None, f"請求錯誤: {e}"
 
-# --- 【新增】定時重啟任務 (每 12 小時) ---
-@tasks.loop(hours=12)
-async def scheduled_restart():
-    # 等待機器人完全啟動後再開始計時 (避免剛啟動就重啟的無限迴圈)
-    await bot.wait_until_ready()
-    
-    print("⏰ 時間到！執行定期重啟以保持系統健康 (sys.exit)...")
-    
-    # 自我關閉程式
-    # Render 偵測到程式結束 (Process Exit) 後，會自動再次執行 Start Command
-    # 這樣就達到了「重啟」的效果，會清空記憶體並重置所有連線
-    sys.exit(0)
-
-# --- 8. 機器人啟動事件 ---
+# --- 8. 啟動事件 ---
 @bot.event
 async def on_ready():
-    """當機器人成功連線到 Discord 時觸發"""
     print(f'✅ 機器人已登入為: {bot.user}')
     print(f'✅ 已載入 {len(EMOJI_TO_LANGUAGE)} 個表情符號翻譯觸發器。')
-    print('------')
-    
-    # 【新增】啟動定時重啟任務 (如果還沒啟動)
-    if not scheduled_restart.is_running():
-        scheduled_restart.start()
-        print("✅ 定時重啟任務已啟動 (每 12 小時執行一次)")
-        
-    if not translate_client:
-        print("⚠️ 警告:Google 翻譯服務未啟動。")
 
-
-# --- 9. 匯率轉換指令 !cc ---
-@bot.command(
-    name='cc',
-    help=
-    "轉換貨幣。\n用法 1: !cc <金額> (預設 JPY -> TWD)\n用法 2: !cc <來源-目標> <金額> (例如: !cc usd-twd 100)"
-)
+# --- 9. !cc 匯率指令 ---
+@bot.command(name='cc', help="轉換貨幣。")
 async def cc(ctx, *args):
-
-    # --- 參數解析邏輯 ---
-    source_currency_code = "jpy"  # 預設來源貨幣
-    target_currency_code = "twd"  # 預設目標貨幣
-    amount_to_convert_str = "1.0"  # 預設金額
-
-    if not args:
-        # 情況 1: !cc (沒有參數)
-        # 使用所有預設值: 1.0 JPY -> TWD
-        pass
-
-    elif len(args) == 1:
-        arg = args[0]
-        if '-' in arg and not arg.startswith('-'):
-            # 情況 2: !cc jpy-usd (只有貨幣對)
-            parts = arg.split('-')
-            if len(parts) == 2 and parts[0].lower(
-            ) in CURRENCY_CODES and parts[1].lower() in CURRENCY_CODES:
-                source_currency_code = parts[0]
-                target_currency_code = parts[1]
-                # amount_to_convert_str 保持 "1.0"
-            else:
-                # 情況 3: !cc 100 (只有金額)
-                amount_to_convert_str = arg
-                # source/target 保持預設 jpy-twd
-        else:
-            # 情況 3: !cc 100 (只有金額)
-            amount_to_convert_str = arg
-            # source/target 保持預設 jpy-twd
-
+    if not args: return
+    
+    src, tgt, amt_str = "jpy", "twd", "1.0"
+    
+    # 簡易參數解析
+    if len(args) == 1:
+        if '-' in args[0]: # cc jpy-usd
+            parts = args[0].split('-')
+            if len(parts) == 2: src, tgt = parts[0], parts[1]
+        else: # cc 100
+            amt_str = args[0]
     elif len(args) >= 2:
-        # 情況 4: !cc jpy-usd 100
-        arg0 = args[0]
-        arg1 = args[1]
-        if '-' in arg0 and not arg0.startswith('-'):
-            parts = arg0.split('-')
-            if len(parts) == 2 and parts[0].lower(
-            ) in CURRENCY_CODES and parts[1].lower() in CURRENCY_CODES:
-                source_currency_code = parts[0]
-                target_currency_code = parts[1]
-                amount_to_convert_str = arg1
-            else:
-                await ctx.send("指令格式錯誤。請使用 `!cc <金額>` 或 `!cc <來源-目標> <金額>`")
-                return
-        # 情況 5: !cc 100 jpy-usd (順序顛倒)
-        elif '-' in arg1 and not arg1.startswith('-'):
-            parts = arg1.split('-')
-            if len(parts) == 2 and parts[0].lower(
-            ) in CURRENCY_CODES and parts[1].lower() in CURRENCY_CODES:
-                source_currency_code = parts[0]
-                target_currency_code = parts[1]
-                amount_to_convert_str = arg0
-            else:
-                await ctx.send("指令格式錯誤。請使用 `!cc <金額>` 或 `!cc <來源-目標> <金額>`")
-                return
-        else:
-            await ctx.send("指令格式錯誤。")
-            return
+        if '-' in args[0]: # cc jpy-usd 100
+            parts = args[0].split('-')
+            if len(parts) == 2: src, tgt = parts[0], parts[1]
+            amt_str = args[1]
+        elif '-' in args[1]: # cc 100 jpy-usd
+            parts = args[1].split('-')
+            if len(parts) == 2: src, tgt = parts[0], parts[1]
+            amt_str = args[0]
 
-    # --- 參數解析結束 ---
-
-    # 嘗試將金額轉換為浮點數
     try:
-        float_amount = float(amount_to_convert_str)
-    except ValueError:
-        await ctx.send(f"金額 '{amount_to_convert_str}' 不是一個有效的數字。")
+        amount = float(amt_str)
+    except:
+        await ctx.send("金額格式錯誤")
         return
 
-    # --- 呼叫核心函式 ---
-    converted_amount, error = await perform_currency_conversion(
-        float_amount, source_currency_code.upper(),
-        target_currency_code.upper())
-
-    if error:
-        await ctx.send(error)
+    res, err = await perform_currency_conversion(amount, src.upper(), tgt.upper())
+    if err:
+        await ctx.send(err)
     else:
-        # --- 回覆邏輯 ---
-        reply_reference = ctx.message.reference
-        author_to_mention = ctx.author
+        ref = ctx.message.reference
+        author = ctx.author
+        if ref:
+            try: author = (await ctx.channel.fetch_message(ref.message_id)).author
+            except: pass
+        await ctx.send(f"{author.mention} : `{amount:,.2f} {src.upper()}` = `{res:,.2f} {tgt.upper()}`", reference=ref, mention_author=False)
 
-        if reply_reference:
-            try:
-                replied_to_message = await ctx.channel.fetch_message(
-                    reply_reference.message_id)
-                author_to_mention = replied_to_message.author
-            except Exception as e:
-                print(f"抓取被回覆的訊息時出錯: {e}")
-
-        # 格式化訊息 (標記正確的人,並顯示轉換結果)
-        response_message = (
-            f"{author_to_mention.mention} : "
-            f"`{float_amount:,.2f} {source_currency_code.upper()}` "
-            f" =  `{converted_amount:,.2f} {target_currency_code.upper()}`")
-
-        await ctx.send(response_message,
-                       reference=reply_reference,
-                       mention_author=False)
-
-
-# --- 10. 文字翻譯指令 !tr ---
-@bot.command(
-    name='tr',
-    help=
-    "翻譯文字。\n用法 1: !tr <要翻譯的文字> (自動偵測 -> 繁中)\n用法 2: !tr <來源-目標> <要翻譯的文字> (例如: !tr en-ja hello)"
-)
+# --- 10. !tr 翻譯指令 ---
+@bot.command(name='tr', help="翻譯文字。")
 async def tr(ctx, *args):
-
-    if not args:
-        await ctx.send(
-            "請輸入要翻譯的文字。\n用法 1: `!tr <要翻譯的文字>`\n用法 2: `!tr <來源-目標> <要翻譯的文字>`")
-        return
-
-    # --- 參數解析 ---
-    source_lang_code = None
-    target_lang_code = "zh-TW"
-    text_to_translate_list = list(args)
-    first_arg = args[0]
-
-    if '-' in first_arg and not first_arg.startswith('-'):
-        parts = first_arg.split('-')
+    if not args: return
+    
+    src, tgt, text_list = None, "zh-TW", list(args)
+    
+    if '-' in args[0] and not args[0].startswith('-'):
+        parts = args[0].split('-')
         if len(parts) == 2:
-            temp_source = normalize_lang_code(parts[0])
-            temp_target = normalize_lang_code(parts[1])
-            if temp_source and temp_target:
-                source_lang_code = temp_source
-                target_lang_code = temp_target
-                text_to_translate_list = list(args[1:])
-
-    if not text_to_translate_list:
-        await ctx.send("請在語言代碼後輸入要翻譯的文字。")
-        return
-    text_to_translate = " ".join(text_to_translate_list)
-    # --- 參數解析結束 ---
-
-    # --- 呼叫核心函式 ---
-    translated_text, error = await perform_translation(text_to_translate,
-                                                       target_lang_code,
-                                                       source_lang_code)
-
-    if error:
-        await ctx.send(error)
+            s, t = normalize_lang_code(parts[0]), normalize_lang_code(parts[1])
+            if s and t:
+                src, tgt = s, t
+                text_list = args[1:]
+    
+    if not text_list: return
+    text = " ".join(text_list)
+    
+    res, err = await perform_translation(text, tgt, src)
+    
+    if err:
+        await ctx.send(err)
     else:
-        # --- 回覆邏輯 ---
-        reply_reference = ctx.message.reference
-        author_to_mention = ctx.author
+        ref = ctx.message.reference
+        author = ctx.author
+        if ref:
+            try: author = (await ctx.channel.fetch_message(ref.message_id)).author
+            except: pass
+        await ctx.send(f"{author.mention} : {res}", reference=ref, mention_author=False)
 
-        if reply_reference:
-            try:
-                replied_to_message = await ctx.channel.fetch_message(
-                    reply_reference.message_id)
-                author_to_mention = replied_to_message.author
-            except Exception as e:
-                print(f"抓取被回覆的訊息時出錯: {e}")
-
-        response_message = f"{author_to_mention.mention} : {translated_text}"
-        await ctx.send(response_message,
-                       reference=reply_reference,
-                       mention_author=False)
-
-
-# --- 11. 表情符號翻譯監聽器 ---
+# --- 11. 表情符號翻譯 ---
 @bot.event
-async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    """
-    當有使用者對「任何」訊息 (包含舊訊息) 加上表情符號時觸發
-    """
-
-    if payload.user_id == bot.user.id:
-        return  # 忽略機器人自己的反應
-
-    # .name 屬性對 Unicode (e.g. "🇹🇼") 和 自訂 (e.g. "my_jp_flag") 都有效
-    trigger_key = payload.emoji.name
-
-    if trigger_key not in EMOJI_TO_LANGUAGE:
-        return  # 如果這個表情符號不在我們的字典中,就忽略
-
-    target_lang_code = EMOJI_TO_LANGUAGE[trigger_key]
-
+async def on_raw_reaction_add(payload):
+    if payload.user_id == bot.user.id: return
+    
+    emoji = payload.emoji.name
+    if emoji not in EMOJI_TO_LANGUAGE: return
+    
+    tgt = EMOJI_TO_LANGUAGE[emoji]
+    
     try:
-        # 抓取觸發事件的頻道和訊息
         channel = bot.get_channel(payload.channel_id)
-        if not channel:
-            return
-
-        message = await channel.fetch_message(payload.message_id)
-        text_to_translate = message.content
-
-        if not text_to_translate:
-            return  # 忽略沒有文字的訊息 (例如只有圖片)
-
-        if message.author.id == bot.user.id:
-            return  # 忽略對機器人自己訊息的反應
-
-    except discord.errors.NotFound:
-        print("找不到訊息 (可能已被刪除)")
-        return
+        msg = await channel.fetch_message(payload.message_id)
+        if not msg.content or msg.author.id == bot.user.id: return
+        
+        res, err = await perform_translation(msg.content, tgt)
+        
+        if not err:
+            await channel.send(f"{msg.author.mention} : {res}", reference=msg, mention_author=False)
     except Exception as e:
-        print(f"擷取訊息時發生錯誤: {e}")
-        return
+        print(f"Reaction error: {e}")
 
-    member = payload.member  # member 是「按下表情符號的人」
-    if not member:
-        return
-
-    # --- 呼叫核心函式 ---
-    translated_text, error = await perform_translation(
-        text_to_translate,
-        target_lang_code,
-        source_lang_code=None  # 自動偵測來源
-    )
-
-    if not error:
-        # --- 回覆邏輯 ---
-        # 標記「原始訊息的作者」 (例如 @開開)
-        response_message = f"{message.author.mention} : {translated_text}"
-
-        # 「回覆」那則原始訊息
-        await channel.send(response_message,
-                           reference=message,
-                           mention_author=False)
-    else:
-        # 失敗時也一樣要回覆,並標記「按下表情符號的人」
-        await channel.send(f"{member.mention},翻譯失敗: {error}",
-                           reference=message,
-                           mention_author=False)
-
-
-# --- 12. 啟動機器人 ---
+# --- 12. 啟動 ---
 try:
     keep_alive()
     bot.run(TOKEN)
-except discord.errors.LoginFailure:
-    print("❌ 登入失敗:Discord Token 不正確。請檢查 .env 檔案中的 DISCORD_TOKEN。")
 except Exception as e:
-    print(f"❌ 啟動時發生未預期的錯誤: {e}")
+    print(f"❌ 啟動錯誤: {e}")
