@@ -1,11 +1,12 @@
 # --- 0. 導入必要的函式庫 ---
 import os
+import sys # 【新增】用於執行 sys.exit(0)
 from keep_alive import keep_alive
 import json
 import discord
 import html  # 用於解碼 HTML 特殊字元 (例如 '&#39;')
 import requests  # 用於貨幣轉換的 HTTP 請求
-from discord.ext import commands
+from discord.ext import commands, tasks # 【新增】導入 tasks 用於定時任務
 from google.cloud import translate_v2 as translate
 
 # --- 1. 載入環境變數 (您的 Token) ---
@@ -21,8 +22,6 @@ if not CURRENCY_API_key:
     print("⚠️ 警告:找不到 CURRENCY_API_key。 !cc 匯率指令將無法運作。")
 
 # --- 2. 初始化 Google Cloud Translation (Python 寫入版) ---
-import json
-
 # 嘗試從環境變數讀取 JSON 內容
 google_creds_content = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
 
@@ -199,6 +198,18 @@ async def perform_currency_conversion(
         print(f"Error during exchange rate request: {e}")
         return None, f"請求時發生網路錯誤: {e}"
 
+# --- 【新增】定時重啟任務 (每 12 小時) ---
+@tasks.loop(hours=12)
+async def scheduled_restart():
+    # 等待機器人完全啟動後再開始計時 (避免剛啟動就重啟的無限迴圈)
+    await bot.wait_until_ready()
+    
+    print("⏰ 時間到！執行定期重啟以保持系統健康 (sys.exit)...")
+    
+    # 自我關閉程式
+    # Render 偵測到程式結束 (Process Exit) 後，會自動再次執行 Start Command
+    # 這樣就達到了「重啟」的效果，會清空記憶體並重置所有連線
+    sys.exit(0)
 
 # --- 8. 機器人啟動事件 ---
 @bot.event
@@ -207,6 +218,12 @@ async def on_ready():
     print(f'✅ 機器人已登入為: {bot.user}')
     print(f'✅ 已載入 {len(EMOJI_TO_LANGUAGE)} 個表情符號翻譯觸發器。')
     print('------')
+    
+    # 【新增】啟動定時重啟任務 (如果還沒啟動)
+    if not scheduled_restart.is_running():
+        scheduled_restart.start()
+        print("✅ 定時重啟任務已啟動 (每 12 小時執行一次)")
+        
     if not translate_client:
         print("⚠️ 警告:Google 翻譯服務未啟動。")
 
