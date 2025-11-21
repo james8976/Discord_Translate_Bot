@@ -20,39 +20,53 @@ if not CURRENCY_API_key:
     # 讓程式繼續運行,但在啟動時給予警告
     print("⚠️ 警告:找不到 CURRENCY_API_key。 !cc 匯率指令將無法運作。")
 
-# --- 2. 初始化 Google Cloud Translation ---
-try:
-    # 從環境變數讀取 Google Cloud 憑證 JSON
-    google_creds_json = os.getenv('GOOGLE_CLOUD_CREDENTIALS')
+# --- 2. 初始化 Google Cloud Translation (修正版) ---
+import json # 記得在檔案最上方確認有 import json，或是直接寫在這裡
 
-    if google_creds_json:
-        # 將 JSON 字串解析為字典
-        credentials_dict = json.loads(google_creds_json)
+# 嘗試從環境變數讀取 JSON 內容
+google_creds_content = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
 
-        # 使用 google.oauth2.service_account 從字典創建憑證
-        from google.oauth2 import service_account
-        credentials = service_account.Credentials.from_service_account_info(
-            credentials_dict)
-
-        # 使用憑證創建翻譯客戶端
-        translate_client = translate.Client(credentials=credentials)
-        print("✅ Google Cloud Translation API 認證成功!")
-    elif os.path.exists('credentials.json'):
-        # 向後兼容:如果環境變數不存在,但本地有 credentials.json,則使用它
-        print(
-            "⚠️ 警告:正在使用本地 credentials.json 檔案。建議將憑證移至環境變數 GOOGLE_CLOUD_CREDENTIALS。"
-        )
+if google_creds_content:
+    try:
+        print("🔄 正在從環境變數建立 credentials.json 檔案...")
+        # 驗證內容是否為有效的 JSON
+        json.loads(google_creds_content) 
+        
+        # 將內容寫入檔案
+        with open('credentials.json', 'w', encoding='utf-8') as f:
+            f.write(google_creds_content)
+        print("✅ credentials.json 檔案建立成功。")
+        
+        # 設定環境變數指向這個檔案
         os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = 'credentials.json'
+        
+        # 初始化客戶端
         translate_client = translate.Client()
-        print("✅ Google Cloud Translation API 認證成功!")
-    else:
-        print(
-            "⚠️ 警告:找不到 GOOGLE_CLOUD_CREDENTIALS 環境變數或 credentials.json 檔案。翻譯功能將無法運作。"
-        )
+        print("✅ Google Cloud Translation API 認證成功！")
+        
+    except json.JSONDecodeError as e:
+        print(f"❌ 環境變數內容不是有效的 JSON 格式: {e}")
         translate_client = None
-except Exception as e:
-    print(f"❌ Google API 認證失敗:{e}")
-    translate_client = None
+    except Exception as e:
+        print(f"❌ 建立 credentials.json 時發生錯誤: {e}")
+        translate_client = None
+else:
+    # 如果環境變數不存在 (可能是本機測試，或變數名稱設錯)
+    print("⚠️ 警告：找不到環境變數 GOOGLE_APPLICATION_CREDENTIALS_JSON。")
+    
+    # 嘗試直接讀取本地檔案 (備用方案)
+    if os.path.exists('credentials.json'):
+        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = 'credentials.json'
+        try:
+            translate_client = translate.Client()
+            print("✅ 使用本地 credentials.json 認證成功！")
+        except Exception as e:
+            print(f"❌ 本地檔案認證失敗: {e}")
+            translate_client = None
+    else:
+        print("❌ 找不到 credentials.json，翻譯功能將無法使用。")
+        translate_client = None
+
 
 # --- 3. 設定 Discord 機器人權限 (Intents) ---
 intents = discord.Intents.default()
