@@ -102,6 +102,12 @@ async def main():
         except Exception:
             pass
 
+    # ── 啟動 Keep-Alive 伺服器（必須在載入 Cog 前啟動，讓 Render 偵測到 port）──
+    keep_alive(bot)
+    import os
+    _port = os.environ.get('PORT', '8080')
+    logger.info(f'✅ Keep-Alive 伺服器已啟動 (port {_port})')
+
     # ── 載入所有 Cog ──────────────────────────────────────
     for ext in COG_EXTENSIONS:
         try:
@@ -109,10 +115,6 @@ async def main():
             logger.info(f'  ✅ 已載入: {ext}')
         except Exception as e:
             logger.error(f'  ❌ 載入失敗 {ext}: {e}')
-
-    # ── 啟動 Keep-Alive 伺服器 ────────────────────────────
-    keep_alive(bot)
-    logger.info('✅ Keep-Alive 伺服器已啟動 (port 8080)')
 
     # ── 啟動 Bot ──────────────────────────────────────────
     logger.info('🚀 正在啟動 PongPong Bot...')
