@@ -1,5 +1,10 @@
-discord.py
-google-cloud-translate
-requests
-Flask
-python-dotenv
+discord.py>=2.3.2
+google-cloud-translate>=3.0.0
+requests>=2.31.0
+Flask>=3.0.0
+python-dotenv>=1.0.0
+aiosqlite>=0.19.0
+matplotlib>=3.8.0
+yfinance>=0.2.36
+pytz>=2024.1
+aiohttp>=3.9.0
