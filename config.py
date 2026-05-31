@@ -87,18 +87,32 @@ CURRENCY_FLAGS: dict[str, str] = {
 # ── Google Cloud Translation 初始化 ───────────────────────
 def setup_google_credentials():
     """
-    從環境變數或本地檔案建立 Google Cloud 憑證，
+    從本地檔案或環境變數建立 Google Cloud 憑證，
     回傳 translate.Client 實例 (或 None)。
+    優先使用已存在的 credentials.json，避免 .env 覆蓋損壞。
     """
     from google.cloud import translate_v2 as translate
 
+    cred_path = os.path.join(os.path.dirname(__file__), 'credentials.json')
+
+    # 優先：如果 credentials.json 已存在，直接使用（不覆蓋）
+    if os.path.exists(cred_path):
+        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = cred_path
+        try:
+            client = translate.Client()
+            return client
+        except Exception as e:
+            print(f'❌ 本地憑證認證失敗: {e}')
+            # 繼續嘗試從環境變數重建
+            pass
+
+    # 備用：從環境變數建立 credentials.json
     creds_json = GOOGLE_APPLICATION_CREDENTIALS_JSON
     if creds_json:
         try:
             cred_dict = json.loads(creds_json)
-            cred_path = os.path.join(os.path.dirname(__file__), 'credentials.json')
             with open(cred_path, 'w', encoding='utf-8') as f:
-                json.dump(cred_dict, f)
+                json.dump(cred_dict, f, indent=2)
             os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = cred_path
             client = translate.Client()
             return client
@@ -106,18 +120,8 @@ def setup_google_credentials():
             print(f'❌ Google 憑證初始化失敗: {e}')
             return None
     else:
-        cred_path = os.path.join(os.path.dirname(__file__), 'credentials.json')
-        if os.path.exists(cred_path):
-            os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = cred_path
-            try:
-                client = translate.Client()
-                return client
-            except Exception as e:
-                print(f'❌ 本地憑證認證失敗: {e}')
-                return None
-        else:
-            print('⚠️ 找不到 Google 憑證，翻譯功能將無法使用。')
-            return None
+        print('⚠️ 找不到 Google 憑證，翻譯功能將無法使用。')
+        return None
 
 
 def normalize_lang_code(code: str) -> str | None:
