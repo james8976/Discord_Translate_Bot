@@ -15,6 +15,8 @@ v2.2 — 多用戶 OAuth 支援：
 """
 
 import asyncio
+import base64
+import json
 import os
 import re
 import secrets
@@ -301,29 +303,44 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
             device_name = f'PongPong Radio {guild_name}'
             session.device_name = device_name
 
-            # 清除舊的 librespot 快取（避免殘留舊 credentials 干擾新用戶）
+            # ── 準備 librespot credentials ─────────────────────
+            # librespot CLI 不接受 --access-token 參數
+            # 正確做法：把 OAuth access_token 寫入 credentials.json
+            # 使用 AUTHENTICATION_SPOTIFY_TOKEN (auth_type=1) 格式
             import shutil
-            cache_path = os.path.expanduser('~/.cache/librespot')
-            if os.path.isdir(cache_path):
-                try:
-                    shutil.rmtree(cache_path)
-                    logger.info(f'已清除 librespot 快取: {cache_path}')
-                except Exception as e:
-                    logger.warning(f'清除 librespot 快取失敗: {e}')
+            cache_path = os.path.join(CACHE_DIR, f'guild_{interaction.guild.id}')
+            os.makedirs(cache_path, exist_ok=True)
 
-            # 啟動 librespot → FFmpeg pipeline
+            # 取得 Spotify user ID（librespot credentials 需要 username）
+            spotify_username = spotify_user.get('id', 'unknown')
+
+            # 寫入 credentials.json
+            creds = {
+                'username': spotify_username,
+                'auth_type': 1,
+                'auth_data': base64.b64encode(access_token.encode('utf-8')).decode('utf-8'),
+            }
+            creds_file = os.path.join(cache_path, 'credentials.json')
+            with open(creds_file, 'w') as f:
+                json.dump(creds, f)
+            logger.info(f'已寫入 librespot credentials (user={spotify_username})')
+
+            # ── 啟動 librespot → FFmpeg pipeline ──────────────
             librespot_cmd = [
                 LIBRESPOT_PATH,
                 '--name', device_name,
                 '--backend', 'pipe',
+                '--device', '/dev/stdout',     # ★ 明確輸出到 stdout
                 '--format', 'S16',
                 '--bitrate', '320',
                 '--initial-volume', '100',
                 '--device-type', 'speaker',
                 '--enable-volume-normalisation',
                 '--disable-discovery',
-                '--access-token', access_token,
+                '--cache', cache_path,          # ★ 指向含 credentials.json 的目錄
             ]
+
+            logger.info(f'啟動 librespot: {" ".join(librespot_cmd[:8])}...')
 
             session.librespot_proc = subprocess.Popen(
                 librespot_cmd,
@@ -331,11 +348,20 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
                 stderr=subprocess.PIPE,
             )
 
+            # 等待 librespot 初始化（最多 5 秒）
+            await asyncio.sleep(1)
+            if session.librespot_proc.poll() is not None:
+                # librespot 已退出，讀取 stderr 查看錯誤
+                stderr_out = session.librespot_proc.stderr.read().decode('utf-8', errors='ignore')[:500]
+                logger.error(f'librespot 啟動失敗: {stderr_out}')
+                session.cleanup()
+                await interaction.followup.send(
+                    f'❌ librespot 啟動失敗：\n```\n{stderr_out[:300]}\n```'
+                )
+                return
+
             # FFmpeg: -re 強制實時讀取 + aresample=async 做時鐘漂移補償
-            # 這是 librespot pipe backend 的著名 bug (issue #340) 的修復方案：
-            # pipe 沒有硬體時鐘回壓，librespot 會以最快速度 dump PCM 到 pipe，
-            # -re 讓 FFmpeg 成為時鐘主宰，按實時速率消費輸入，
-            # aresample=async=1000 做微小的時鐘漂移補償（容忍 1000 個 sample 的偏差）
+            # 這是 librespot pipe backend 的著名 bug (issue #340) 的修復方案
             ffmpeg_cmd = [
                 FFMPEG_PATH,
                 '-re',                     # ★ 強制實時速率讀取（時鐘主宰）
@@ -358,21 +384,21 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
                 stderr=subprocess.PIPE,
             )
 
-            # ── Drain 初始 burst ──────────────────────────────
-            # librespot 啟動時會瞬間 dump Spotify 預載的 buffer (5~15 秒)
-            # 如果直接播放，Discord 會以正常 20ms/frame 消費這些堆積資料
-            # 但因為堆積量 >> 實時量，表現為「快轉」
-            # 解法：在 vc.play() 之前先靜靜地讀掉這些初始 burst
-            logger.info('正在排出 librespot 初始 burst...')
-            drain_start = time.time()
-            while time.time() - drain_start < INITIAL_DRAIN_SECONDS:
-                try:
-                    drained = session.ffmpeg_proc.stdout.read(3840 * 10)  # 一次讀多一點
-                    if not drained:
+            # ── Drain 初始 burst（在 executor 中執行，不阻塞 event loop）──
+            def _drain_burst():
+                drain_start = time.time()
+                while time.time() - drain_start < INITIAL_DRAIN_SECONDS:
+                    try:
+                        drained = session.ffmpeg_proc.stdout.read(3840 * 10)
+                        if not drained:
+                            break
+                    except Exception:
                         break
-                except Exception:
-                    break
-            logger.info(f'初始 burst 排出完成 ({time.time() - drain_start:.1f}s)')
+                return time.time() - drain_start
+
+            logger.info('正在排出 librespot 初始 burst...')
+            drain_time = await asyncio.get_running_loop().run_in_executor(None, _drain_burst)
+            logger.info(f'初始 burst 排出完成 ({drain_time:.1f}s)')
 
             source = discord.PCMAudio(session.ffmpeg_proc.stdout)
             source = discord.PCMVolumeTransformer(source, volume=1.0)
