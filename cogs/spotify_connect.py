@@ -306,7 +306,7 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
             # ── 準備 librespot credentials ─────────────────────
             # librespot CLI 不接受 --access-token 參數
             # 正確做法：把 OAuth access_token 寫入 credentials.json
-            # 使用 AUTHENTICATION_SPOTIFY_TOKEN (auth_type=1) 格式
+            # 使用 AUTHENTICATION_SPOTIFY_TOKEN (auth_type=3) 格式
             import shutil
             cache_path = os.path.join(CACHE_DIR, f'guild_{interaction.guild.id}')
             os.makedirs(cache_path, exist_ok=True)
@@ -315,22 +315,25 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
             spotify_username = spotify_user.get('id', 'unknown')
 
             # 寫入 credentials.json
+            # auth_type 對應 librespot AuthenticationType protobuf enum:
+            #   0 = AUTHENTICATION_USER_PASS
+            #   1 = AUTHENTICATION_STORED_SPOTIFY_CREDENTIALS (Zeroconf blob)
+            #   3 = AUTHENTICATION_SPOTIFY_TOKEN (OAuth access token) ← 我們用這個
             creds = {
                 'username': spotify_username,
-                'auth_type': 1,
+                'auth_type': 3,
                 'auth_data': base64.b64encode(access_token.encode('utf-8')).decode('utf-8'),
             }
             creds_file = os.path.join(cache_path, 'credentials.json')
             with open(creds_file, 'w') as f:
                 json.dump(creds, f)
-            logger.info(f'已寫入 librespot credentials (user={spotify_username})')
+            logger.info(f'已寫入 librespot credentials (user={spotify_username}, type=SPOTIFY_TOKEN)')
 
             # ── 啟動 librespot → FFmpeg pipeline ──────────────
             librespot_cmd = [
                 LIBRESPOT_PATH,
                 '--name', device_name,
                 '--backend', 'pipe',
-                '--device', '/dev/stdout',     # ★ 明確輸出到 stdout
                 '--format', 'S16',
                 '--bitrate', '320',
                 '--initial-volume', '100',
@@ -340,7 +343,7 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
                 '--cache', cache_path,          # ★ 指向含 credentials.json 的目錄
             ]
 
-            logger.info(f'啟動 librespot: {" ".join(librespot_cmd[:8])}...')
+            logger.info(f'啟動 librespot: {" ".join(librespot_cmd)}')
 
             session.librespot_proc = subprocess.Popen(
                 librespot_cmd,
@@ -348,15 +351,15 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
                 stderr=subprocess.PIPE,
             )
 
-            # 等待 librespot 初始化（最多 5 秒）
-            await asyncio.sleep(1)
+            # 等待 librespot 初始化（給 3 秒，認證需要時間）
+            await asyncio.sleep(3)
             if session.librespot_proc.poll() is not None:
                 # librespot 已退出，讀取 stderr 查看錯誤
-                stderr_out = session.librespot_proc.stderr.read().decode('utf-8', errors='ignore')[:500]
+                stderr_out = session.librespot_proc.stderr.read().decode('utf-8', errors='ignore')
                 logger.error(f'librespot 啟動失敗: {stderr_out}')
                 session.cleanup()
                 await interaction.followup.send(
-                    f'❌ librespot 啟動失敗：\n```\n{stderr_out[:300]}\n```'
+                    f'❌ librespot 啟動失敗：\n```\n{stderr_out[:800]}\n```'
                 )
                 return
 
