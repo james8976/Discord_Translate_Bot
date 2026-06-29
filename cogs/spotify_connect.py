@@ -393,10 +393,32 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
             def after_callback(error):
                 if error:
                     logger.error(f'Spotify Connect 播放錯誤: {error}')
-                asyncio.run_coroutine_threadsafe(
-                    self._auto_cleanup(interaction.guild),
-                    self.bot.loop,
-                )
+                else:
+                    logger.info('Spotify Connect 音頻源結束（可能是 librespot 閒置或暫停）')
+                # 檢查 librespot 是否真的退出了
+                if session.librespot_proc and session.librespot_proc.poll() is not None:
+                    # librespot 已退出，讀取 stderr
+                    exit_code = session.librespot_proc.returncode
+                    try:
+                        stderr_out = session.librespot_proc.stderr.read().decode('utf-8', errors='ignore')[:500]
+                    except Exception:
+                        stderr_out = '(無法讀取)'
+                    logger.error(f'librespot 已退出 (exit_code={exit_code}): {stderr_out}')
+                    asyncio.run_coroutine_threadsafe(
+                        self._auto_cleanup(interaction.guild),
+                        self.bot.loop,
+                    )
+                else:
+                    # librespot 還在運行，只是沒有音頻資料（閒置狀態）
+                    # 重新換一個 source 繼續讀取
+                    logger.info('librespot 仍在運行，重新掛載音頻源...')
+                    try:
+                        new_source = discord.PCMAudio(session.ffmpeg_proc.stdout)
+                        new_source = discord.PCMVolumeTransformer(new_source, volume=1.0)
+                        if interaction.guild.voice_client and not interaction.guild.voice_client.is_playing():
+                            interaction.guild.voice_client.play(new_source, after=after_callback)
+                    except Exception as e:
+                        logger.error(f'重新掛載音頻源失敗: {e}')
 
             vc.play(source, after=after_callback)
 
@@ -766,7 +788,7 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
                 if not text:
                     continue
 
-                logger.debug(f'[librespot] {text}')
+                logger.info(f'[librespot] {text}')
 
                 # 用 regex 提取 Spotify track URI
                 match = SPOTIFY_URI_RE.search(text)
@@ -971,18 +993,22 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
         logger.info(f'Spotify Connect 已停止 (guild={guild.id})')
 
     async def _auto_cleanup(self, guild: discord.Guild):
-        """自動清理（當播放結束時）"""
+        """自動清理（當 librespot 退出時）"""
         session = self.get_session(guild.id)
         if session.is_active:
             if session.librespot_proc and session.librespot_proc.poll() is not None:
+                exit_code = session.librespot_proc.returncode
+                logger.info(f'auto_cleanup: librespot 已退出 (exit_code={exit_code})')
                 await self._stop_session(guild)
                 if session.text_channel:
                     try:
                         await session.text_channel.send(
-                            '📡 Spotify Connect 已自動斷開（連線結束）'
+                            f'📡 Spotify Connect 已自動斷開（librespot exit_code={exit_code}）'
                         )
                     except Exception:
                         pass
+            else:
+                logger.info('auto_cleanup: librespot 仍在運行，不清理')
 
     # ── Cog 卸載 ───────────────────────────────────────────
     def cog_unload(self):
