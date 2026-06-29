@@ -20,6 +20,7 @@ import json
 import os
 import re
 import secrets
+import select
 import subprocess
 import threading
 import time
@@ -51,6 +52,47 @@ SPOTIFY_URI_RE = re.compile(r'spotify:track:([A-Za-z0-9]{22})')
 # OAuth 等待超時（秒）
 OAUTH_TIMEOUT = 120
 
+
+# ── 自訂 Audio Source（解決 librespot 閒置時 pipe 阻塞導致 Discord 斷線）──
+class LibrespotAudioSource(discord.AudioSource):
+    """
+    從 FFmpeg pipe 讀取 PCM 音頻。
+    當 librespot 閒置（還沒有人播音樂）時，發送靜音幀保持 Discord 語音連線活躍。
+    用 select() 做非阻塞讀取，避免卡死在空 pipe 上。
+    """
+    FRAME_SIZE = 3840  # 20ms @ 48kHz, 16-bit, stereo
+    SILENCE = b'\x00' * FRAME_SIZE
+
+    def __init__(self, stream):
+        self.stream = stream
+        self._closed = False
+
+    def read(self) -> bytes:
+        if self._closed:
+            return b''
+        try:
+            # 用 select 檢查是否有資料（最多等 10ms）
+            ready, _, _ = select.select([self.stream], [], [], 0.01)
+            if ready:
+                data = self.stream.read(self.FRAME_SIZE)
+                if not data:
+                    self._closed = True
+                    return b''
+                if len(data) < self.FRAME_SIZE:
+                    data += b'\x00' * (self.FRAME_SIZE - len(data))
+                return data
+            else:
+                # 沒有資料，發送靜音保持連線
+                return self.SILENCE
+        except Exception:
+            self._closed = True
+            return b''
+
+    def is_opus(self) -> bool:
+        return False
+
+    def cleanup(self):
+        pass
 
 
 # ── Spotify Connect Session ────────────────────────────────
@@ -387,17 +429,14 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
             # stdout.read() 會無限期阻塞（已知 bug — 之前卡了 23.8 秒甚至永久卡住）。
             # FFmpeg 的 -re 已經強制實時速率讀取，不需要手動 drain。
 
-            source = discord.PCMAudio(session.ffmpeg_proc.stdout)
+            source = LibrespotAudioSource(session.ffmpeg_proc.stdout)
             source = discord.PCMVolumeTransformer(source, volume=1.0)
 
             def after_callback(error):
                 if error:
                     logger.error(f'Spotify Connect 播放錯誤: {error}')
-                else:
-                    logger.info('Spotify Connect 音頻源結束（可能是 librespot 閒置或暫停）')
                 # 檢查 librespot 是否真的退出了
                 if session.librespot_proc and session.librespot_proc.poll() is not None:
-                    # librespot 已退出，讀取 stderr
                     exit_code = session.librespot_proc.returncode
                     try:
                         stderr_out = session.librespot_proc.stderr.read().decode('utf-8', errors='ignore')[:500]
@@ -409,16 +448,7 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
                         self.bot.loop,
                     )
                 else:
-                    # librespot 還在運行，只是沒有音頻資料（閒置狀態）
-                    # 重新換一個 source 繼續讀取
-                    logger.info('librespot 仍在運行，重新掛載音頻源...')
-                    try:
-                        new_source = discord.PCMAudio(session.ffmpeg_proc.stdout)
-                        new_source = discord.PCMVolumeTransformer(new_source, volume=1.0)
-                        if interaction.guild.voice_client and not interaction.guild.voice_client.is_playing():
-                            interaction.guild.voice_client.play(new_source, after=after_callback)
-                    except Exception as e:
-                        logger.error(f'重新掛載音頻源失敗: {e}')
+                    logger.info('after_callback: librespot 仍在運行，音頻源意外結束')
 
             vc.play(source, after=after_callback)
 
