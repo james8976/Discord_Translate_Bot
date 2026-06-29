@@ -51,11 +51,6 @@ SPOTIFY_URI_RE = re.compile(r'spotify:track:([A-Za-z0-9]{22})')
 # OAuth 等待超時（秒）
 OAUTH_TIMEOUT = 120
 
-# librespot 啟動後需要 drain 掉的初始 burst 時間（秒）
-# librespot pipe backend 啟動時會瞬間 dump 5~15 秒的預載 buffer
-# 如果不排掉，Discord 會以正常速率播放這些堆積的資料，表現為「快轉」
-INITIAL_DRAIN_SECONDS = 2.0
-
 
 
 # ── Spotify Connect Session ────────────────────────────────
@@ -387,21 +382,10 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
                 stderr=subprocess.PIPE,
             )
 
-            # ── Drain 初始 burst（在 executor 中執行，不阻塞 event loop）──
-            def _drain_burst():
-                drain_start = time.time()
-                while time.time() - drain_start < INITIAL_DRAIN_SECONDS:
-                    try:
-                        drained = session.ffmpeg_proc.stdout.read(3840 * 10)
-                        if not drained:
-                            break
-                    except Exception:
-                        break
-                return time.time() - drain_start
-
-            logger.info('正在排出 librespot 初始 burst...')
-            drain_time = await asyncio.get_running_loop().run_in_executor(None, _drain_burst)
-            logger.info(f'初始 burst 排出完成 ({drain_time:.1f}s)')
+            # 注意：不做 drain！
+            # librespot 剛啟動時還沒有人播音樂，FFmpeg 沒有資料輸出。
+            # stdout.read() 會無限期阻塞（已知 bug — 之前卡了 23.8 秒甚至永久卡住）。
+            # FFmpeg 的 -re 已經強制實時速率讀取，不需要手動 drain。
 
             source = discord.PCMAudio(session.ffmpeg_proc.stdout)
             source = discord.PCMVolumeTransformer(source, volume=1.0)
