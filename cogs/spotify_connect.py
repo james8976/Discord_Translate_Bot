@@ -58,13 +58,14 @@ class LibrespotAudioSource(discord.AudioSource):
     """
     從 FFmpeg pipe 讀取 PCM 音頻。
     當 librespot 閒置（還沒有人播音樂）時，發送靜音幀保持 Discord 語音連線活躍。
-    用 select() 做非阻塞讀取，避免卡死在空 pipe 上。
+    用 select() + os.read() 做真正非阻塞讀取，避免卡死在空 pipe 上。
     """
     FRAME_SIZE = 3840  # 20ms @ 48kHz, 16-bit, stereo
     SILENCE = b'\x00' * FRAME_SIZE
 
     def __init__(self, stream):
         self.stream = stream
+        self._fd = stream.fileno()  # 用 os.read() 讀取 fd——不會阻塞
         self._closed = False
 
     def read(self) -> bytes:
@@ -72,9 +73,10 @@ class LibrespotAudioSource(discord.AudioSource):
             return b''
         try:
             # 用 select 檢查是否有資料（最多等 10ms）
-            ready, _, _ = select.select([self.stream], [], [], 0.01)
+            ready, _, _ = select.select([self._fd], [], [], 0.01)
             if ready:
-                data = self.stream.read(self.FRAME_SIZE)
+                # os.read() 是真正非阻塞讀取：讀到多少就回多少，不會等滿 3840
+                data = os.read(self._fd, self.FRAME_SIZE)
                 if not data:
                     self._closed = True
                     return b''
@@ -126,8 +128,8 @@ class SpotifySession:
         self.track_url: Optional[str] = None
         self.np_update_task: Optional[asyncio.Task] = None
 
-    def cleanup(self):
-        """清理所有子程序"""
+    def cleanup(self, guild_id: int = None):
+        """清理所有子程序、重置所有狀態、刪除 credentials"""
         self.is_active = False
         self.is_authenticating = False
         for proc in [self.ffmpeg_proc, self.librespot_proc]:
@@ -151,9 +153,22 @@ class SpotifySession:
         self.track_album_art = None
         self.track_url = None
         self.access_token = None
+        self.refresh_token = None
+        self.connected_user_name = None
+        self.connected_discord_user = None
+        self.now_playing_msg = None
+        self.text_channel = None
         if self.np_update_task and not self.np_update_task.done():
             self.np_update_task.cancel()
         self.np_update_task = None
+        # Bug #15: 刪除磁碟上的 credentials.json 避免 token 洩漏
+        if guild_id is not None:
+            try:
+                creds_file = os.path.join(CACHE_DIR, f'guild_{guild_id}', 'credentials.json')
+                if os.path.exists(creds_file):
+                    os.remove(creds_file)
+            except Exception:
+                pass
 
 
 # ══════════════════════════════════════════════════════════════
@@ -435,14 +450,10 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
             def after_callback(error):
                 if error:
                     logger.error(f'Spotify Connect 播放錯誤: {error}')
-                # 檢查 librespot 是否真的退出了
+                # Bug #13: 只檢查 poll()，不讀 stderr（避免和 _monitor_stderr 竞爭）
                 if session.librespot_proc and session.librespot_proc.poll() is not None:
                     exit_code = session.librespot_proc.returncode
-                    try:
-                        stderr_out = session.librespot_proc.stderr.read().decode('utf-8', errors='ignore')[:500]
-                    except Exception:
-                        stderr_out = '(無法讀取)'
-                    logger.error(f'librespot 已退出 (exit_code={exit_code}): {stderr_out}')
+                    logger.error(f'librespot 已退出 (exit_code={exit_code})')
                     asyncio.run_coroutine_threadsafe(
                         self._auto_cleanup(interaction.guild),
                         self.bot.loop,
@@ -691,8 +702,6 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
                     elapsed_sec = min(elapsed_sec, total_sec)
                 el_min, el_sec = divmod(elapsed_sec, 60)
 
-                progress_bar = self._format_progress_bar(elapsed_sec, total_sec)
-
                 embed = discord.Embed(
                     title=name,
                     url=track_url,
@@ -710,9 +719,9 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
                     inline=True,
                 )
                 embed.add_field(
-                    name='',
-                    value=f'`{el_min}:{el_sec:02d}` {progress_bar} `{dur_min}:{dur_sec:02d}`',
-                    inline=False,
+                    name='⏱️ 時長',
+                    value=f'`{el_min}:{el_sec:02d}` / `{dur_min}:{dur_sec:02d}`',
+                    inline=True,
                 )
 
                 if album_art:
@@ -879,9 +888,8 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
 
                 total_sec = duration_ms // 1000
                 dur_min, dur_sec = divmod(total_sec, 60)
-                progress_bar = self._format_progress_bar(0, total_sec)
 
-                # 儲存曲目資訊到 session（給 /spotify np 和進度更新使用）
+                # 儲存曲目資訊到 session（給 /spotify np 使用）
                 session.track_name = name
                 session.track_artists = artists
                 session.track_album = album
@@ -901,11 +909,6 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
                     name='⏱️ 時長',
                     value=f'`{dur_min}:{dur_sec:02d}`',
                     inline=True,
-                )
-                embed.add_field(
-                    name='',
-                    value=f'`0:00` {progress_bar} `{dur_min}:{dur_sec:02d}`',
-                    inline=False,
                 )
 
                 if album_art:
@@ -927,10 +930,7 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
 
                 session.now_playing_msg = await session.text_channel.send(embed=embed, view=view)
 
-                # 啟動進度條自動更新任務
-                session.np_update_task = asyncio.create_task(
-                    self._update_progress_loop(session, total_sec)
-                )
+                # 進度條已移除，不再啟動自動更新任務
                 return
 
             except Exception as e:
@@ -945,64 +945,8 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
         embed.set_footer(text=f'📡 {session.device_name}')
         session.now_playing_msg = await session.text_channel.send(embed=embed)
 
-    async def _update_progress_loop(self, session: SpotifySession, total_sec: int):
-        """每 15 秒自動更新 Now Playing 嵌入的進度條"""
-        try:
-            dur_min, dur_sec = divmod(total_sec, 60)
-
-            while session.is_active and session.now_playing_msg and total_sec > 0:
-                await asyncio.sleep(15)
-
-                if not session.is_active or not session.now_playing_msg:
-                    break
-
-                elapsed_sec = 0
-                if session.track_start_time:
-                    elapsed_sec = int(time.time() - session.track_start_time)
-
-                # 如果超過歌曲時長，停止更新（等下一首觸發）
-                if elapsed_sec >= total_sec:
-                    break
-
-                el_min, el_sec = divmod(elapsed_sec, 60)
-                progress_bar = self._format_progress_bar(elapsed_sec, total_sec)
-
-                try:
-                    embed = session.now_playing_msg.embeds[0].copy()
-
-                    # 更新進度條欄位（最後一個 field）
-                    if embed.fields:
-                        last_idx = len(embed.fields) - 1
-                        embed.set_field_at(
-                            last_idx,
-                            name='',
-                            value=f'`{el_min}:{el_sec:02d}` {progress_bar} `{dur_min}:{dur_sec:02d}`',
-                            inline=False,
-                        )
-
-                    await session.now_playing_msg.edit(embed=embed)
-                except discord.NotFound:
-                    # 訊息被刪除了
-                    session.now_playing_msg = None
-                    break
-                except Exception as e:
-                    logger.debug(f'進度更新失敗: {e}')
-                    break
-
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.debug(f'進度更新循環結束: {e}')
-
-    @staticmethod
-    def _format_progress_bar(current_sec: int, total_sec: int, length: int = 16) -> str:
-        """產生文字進度條"""
-        if total_sec <= 0:
-            return '━' * length
-        ratio = min(current_sec / total_sec, 1.0)
-        filled = int(ratio * length)
-        bar = '━' * filled + '🔘' + '─' * (length - filled)
-        return bar
+    # 進度條功能已移除（15 秒更新一次不夠即時）
+    # _update_progress_loop 和 _format_progress_bar 已刪除
 
     async def _stop_session(self, guild: discord.Guild):
         """停止 Spotify Connect 會話"""
@@ -1015,7 +959,7 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
             except Exception as e:
                 logger.warning(f'斷開語音連線時出錯: {e}')
 
-        session.cleanup()
+        session.cleanup(guild_id=guild.id)
 
         if guild.id in self.sessions:
             del self.sessions[guild.id]
@@ -1044,7 +988,7 @@ class SpotifyConnect(commands.Cog, name='📡 Spotify Connect'):
     def cog_unload(self):
         for guild_id in list(self.sessions.keys()):
             session = self.sessions[guild_id]
-            session.cleanup()
+            session.cleanup(guild_id=guild_id)
             guild = self.bot.get_guild(guild_id)
             if guild and guild.voice_client:
                 asyncio.run_coroutine_threadsafe(

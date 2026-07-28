@@ -14,12 +14,21 @@ load_dotenv()
 # ── Discord ────────────────────────────────────────────────
 DISCORD_TOKEN: str = os.getenv('DISCORD_TOKEN', '')
 BOT_PREFIX: str = '!'
-BOT_VERSION: str = 'v2.0'
+BOT_VERSION: str = 'v2.2'
 
 # ── API Keys ───────────────────────────────────────────────
 CURRENCY_API_KEY: str = os.getenv('CURRENCY_API_key', '')
 OPENWEATHER_API_KEY: str = os.getenv('OPENWEATHER_API_KEY', '')
 GOOGLE_APPLICATION_CREDENTIALS_JSON: str = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON', '')
+
+# ── Spotify ────────────────────────────────────────────────
+SPOTIFY_CLIENT_ID: str = os.getenv('SPOTIFY_CLIENT_ID', '')
+SPOTIFY_CLIENT_SECRET: str = os.getenv('SPOTIFY_CLIENT_SECRET', '')
+SPOTIFY_REDIRECT_URI: str = os.getenv(
+    'SPOTIFY_REDIRECT_URI',
+    'https://hijiri4005.duckdns.org:8080/spotify/callback'
+)
+SPOTIFY_SCOPES: str = 'streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state user-read-currently-playing app-remote-control'
 
 # ── 快取 ───────────────────────────────────────────────────
 CACHE_EXPIRY_SECONDS: int = 300  # 5 分鐘
@@ -37,6 +46,7 @@ COLOR_STOCK_UP  = 0x57F287   # 股票漲（美股）
 COLOR_STOCK_DOWN = 0xED4245  # 股票跌
 COLOR_TW_UP     = 0xED4245   # 台股漲 → 紅色（台灣慣例）
 COLOR_TW_DOWN   = 0x57F287   # 台股跌 → 綠色
+COLOR_MUSIC     = 0x1DB954   # 音樂（Spotify 綠）
 
 # ── 語言別名 ───────────────────────────────────────────────
 LANGUAGE_ALIASES: dict[str, str] = {
