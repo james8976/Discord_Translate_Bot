@@ -232,6 +232,27 @@ def spotify_token_relay():
         return jsonify({'error': str(e)}), 500
 
 
+# ── 研究報告靜態頁面 ──────────────────────────────────────
+@app.route('/research/')
+def research_report():
+    """提供研究實驗結果的 HTML 報告"""
+    bot_dir = os.path.dirname(os.path.dirname(__file__))
+    report = os.path.join(bot_dir, 'research', 'results', 'report.html')
+    if os.path.exists(report):
+        with open(report, 'r', encoding='utf-8') as f:
+            return f.read(), 200, {'Content-Type': 'text/html; charset=utf-8'}
+    return '<h1>No report yet</h1><p>Run: python research/run_experiment.py</p>', 404
+
+
+@app.route('/research/<path:filename>')
+def research_static(filename):
+    """提供研究圖表等靜態檔案"""
+    from flask import send_from_directory
+    bot_dir = os.path.dirname(os.path.dirname(__file__))
+    results_dir = os.path.join(bot_dir, 'research', 'results')
+    return send_from_directory(results_dir, filename)
+
+
 # ══════════════════════════════════════════════════════════════
 
 def _run():
