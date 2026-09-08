@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 PongPong 研究模組 — Demo 測試腳本
 用合成資料驗證整個 Procrustes 對齊 + 信心分數流程

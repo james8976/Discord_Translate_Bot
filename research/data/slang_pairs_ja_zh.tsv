@@ -1,0 +1,47 @@
+# 日中網路俚語對照表（供研究實驗使用）
+# 格式：日文	中文	類別	說明
+# 類別：slang=俚語, meme=迷因, abbrev=縮寫, neologism=新造詞
+#
+# ── 日文網路俚語 → 中文對應 ──
+草	笑死	slang	日文w(笑)的延伸，草の形がwに似ている
+ｗｗｗ	哈哈哈	slang	笑いの連続表現
+エモい	感性的	neologism	emotional的日語化
+推し	推	slang	最喜歡的偶像/角色
+ガチ	真的	slang	認真的、不是開玩笑
+やばい	太扯了	slang	正面或負面的強烈感嘆
+それな	真的	slang	表示強烈同意
+ワンチャン	說不定	abbrev	one chance的縮寫
+マジ	真的假的	slang	認真嗎
+ディスる	嗆	slang	disrespect的日語動詞化
+バズる	爆紅	neologism	buzz的日語動詞化
+イケメン	帥哥	slang	合成語：イケてるメン
+リア充	現充	slang	現實生活充實的人
+オタク	宅	slang	御宅族的縮略
+ツンデレ	傲嬌	slang	表面冷酷內心溫柔
+ドヤ顔	得意臉	slang	自滿的表情
+神	大神	slang	非常厲害的意思
+鬼	超級	slang	程度極端的前綴
+沼	入坑	slang	沉迷於某事物
+尊い	神聖	slang	對喜歡事物的極端讚美
+てぇてぇ	太可愛了	slang	尊い的口語變形
+草生える	笑死我	slang	草的延伸，「長草了」
+陰キャ	邊緣人	slang	陰気キャラクター的縮寫
+陽キャ	社牛	slang	陽気キャラクター的縮寫
+パリピ	派對咖	abbrev	party people的縮寫
+ぴえん	嗚嗚	meme	哭泣的擬聲詞
+メンヘラ	心理脆弱的人	slang	mental health的日語化
+コスパ	性價比	abbrev	cost performance的縮寫
+タイパ	時間效益	abbrev	time performance的縮寫
+ネタバレ	劇透	slang	種明かし的網路用語
+#
+# ── 對照組：標準詞彙（應該翻得好的）──
+猫	貓	standard	基礎名詞
+大学	大學	standard	基礎名詞
+食べ物	食物	standard	基礎名詞
+天気	天氣	standard	基礎名詞
+友達	朋友	standard	基礎名詞
+音楽	音樂	standard	基礎名詞
+映画	電影	standard	基礎名詞
+旅行	旅行	standard	基礎名詞
+電車	電車	standard	基礎名詞
+病院	醫院	standard	基礎名詞
