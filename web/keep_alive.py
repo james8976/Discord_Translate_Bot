@@ -233,24 +233,36 @@ def spotify_token_relay():
 
 
 # ── 研究報告靜態頁面 ──────────────────────────────────────
+def _research_base_dir():
+    """優先使用 latest/，向後相容舊版 results/ 根目錄"""
+    bot_dir = os.path.dirname(os.path.dirname(__file__))
+    latest = os.path.join(bot_dir, 'research', 'results', 'latest')
+    if os.path.isdir(latest):
+        return latest
+    return os.path.join(bot_dir, 'research', 'results')
+
+
 @app.route('/research/')
 def research_report():
-    """提供研究實驗結果的 HTML 報告"""
-    bot_dir = os.path.dirname(os.path.dirname(__file__))
-    report = os.path.join(bot_dir, 'research', 'results', 'report.html')
-    if os.path.exists(report):
-        with open(report, 'r', encoding='utf-8') as f:
-            return f.read(), 200, {'Content-Type': 'text/html; charset=utf-8'}
-    return '<h1>No report yet</h1><p>Run: python research/run_experiment.py</p>', 404
+    """提供研究實驗結果 HTML（四組總覽或單一報告）"""
+    base = _research_base_dir()
+    for name in ('SUMMARY.html', 'report.html'):
+        report = os.path.join(base, name)
+        if os.path.exists(report):
+            with open(report, 'r', encoding='utf-8') as f:
+                return f.read(), 200, {'Content-Type': 'text/html; charset=utf-8'}
+    return (
+        '<h1>No report yet</h1>'
+        '<p>Run: python research/run_experiment.py</p>'
+        '<p>Or fetch from VM: powershell -File research/fetch_results.ps1</p>'
+    ), 404
 
 
 @app.route('/research/<path:filename>')
 def research_static(filename):
-    """提供研究圖表等靜態檔案"""
+    """提供研究圖表、各語言對子報告等靜態檔案"""
     from flask import send_from_directory
-    bot_dir = os.path.dirname(os.path.dirname(__file__))
-    results_dir = os.path.join(bot_dir, 'research', 'results')
-    return send_from_directory(results_dir, filename)
+    return send_from_directory(_research_base_dir(), filename)
 
 
 # ══════════════════════════════════════════════════════════════
