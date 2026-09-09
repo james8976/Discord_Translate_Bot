@@ -18,6 +18,7 @@ import sys
 import time
 import json
 import urllib.request
+import urllib.error
 import numpy as np
 
 # 確保能 import research 模組
@@ -38,19 +39,29 @@ FASTTEXT_URLS = {
     'zh': 'https://dl.fbaipublicfiles.com/fasttext/vectors-wiki/wiki.zh.vec',
 }
 MUSE_DICT_URLS = {
-    'ja-zh': 'https://dl.fbaipublicfiles.com/arrival/dictionaries/ja-zh.txt',
-    'zh-ja': 'https://dl.fbaipublicfiles.com/arrival/dictionaries/zh-ja.txt',
+    'ja-zh': 'https://raw.githubusercontent.com/facebookresearch/MUSE/main/data/crosslingual/dictionaries/ja-zh.txt',
+    'zh-ja': 'https://raw.githubusercontent.com/facebookresearch/MUSE/main/data/crosslingual/dictionaries/zh-ja.txt',
+}
+# 備用 URL（若 GitHub 也不行）
+MUSE_DICT_FALLBACK = {
+    'ja-zh': 'https://dl.fbaipublicfiles.com/arrival/dictionaries/ja-zh.0-5000.txt',
+    'zh-ja': 'https://dl.fbaipublicfiles.com/arrival/dictionaries/zh-ja.0-5000.txt',
 }
 
 
 def download_with_progress(url, dest):
-    """下載檔案並顯示進度"""
+    """下載檔案並顯示進度（含 User-Agent 避免 403）"""
     if os.path.exists(dest):
         size_mb = os.path.getsize(dest) / 1024 / 1024
         print(f'  [跳過] {os.path.basename(dest)} 已存在 ({size_mb:.1f} MB)')
         return
     print(f'  下載中: {os.path.basename(dest)}...')
     start = time.time()
+
+    # 加 User-Agent 避免被 403
+    opener = urllib.request.build_opener()
+    opener.addheaders = [('User-Agent', 'Mozilla/5.0 (PongPong Research)')]
+    urllib.request.install_opener(opener)
 
     def progress(block_num, block_size, total_size):
         downloaded = block_num * block_size
@@ -62,10 +73,16 @@ def download_with_progress(url, dest):
             speed = mb / elapsed if elapsed > 0 else 0
             print(f'\r    {pct:5.1f}% ({mb:.1f}/{total_mb:.1f} MB) {speed:.1f} MB/s', end='', flush=True)
 
-    urllib.request.urlretrieve(url, dest, progress)
+    try:
+        urllib.request.urlretrieve(url, dest, progress)
+    except urllib.error.HTTPError as e:
+        print(f'\r    [WARN] {e.code} {e.reason}，嘗試備用 URL...')
+        return False  # 回傳失敗讓呼叫端嘗試備用
+
     elapsed = time.time() - start
     size_mb = os.path.getsize(dest) / 1024 / 1024
     print(f'\r    完成！{size_mb:.1f} MB ({elapsed:.0f}s)')
+    return True
 
 
 def load_bilingual_dict(path):
@@ -396,7 +413,9 @@ def main():
             download_with_progress(url, dest)
         for name, url in MUSE_DICT_URLS.items():
             dest = os.path.join(DATA_DIR, f'{name}.txt')
-            download_with_progress(url, dest)
+            success = download_with_progress(url, dest)
+            if not success and name in MUSE_DICT_FALLBACK:
+                success = download_with_progress(MUSE_DICT_FALLBACK[name], dest)
     else:
         print('\n[1/6] Skipping download...')
 
