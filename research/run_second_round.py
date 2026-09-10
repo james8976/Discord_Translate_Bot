@@ -220,11 +220,11 @@ def write_html_report(path: str, result: Dict[str, Any]) -> None:
                 html.escape(method), precision['1'], precision['5'], precision['10'], metrics['hubness_skewness'],
             ),
         )
-    content = """<!doctype html><html lang=\"zh-Hant\"><meta charset=\"utf-8\"><title>PongPong 第二輪實驗</title>
-<style>body{font-family:system-ui,'Microsoft JhengHei';max-width:900px;margin:40px auto;line-height:1.65;color:#20242c}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccd3df;padding:10px;text-align:left}th{background:#edf2fb}.note{background:#fff5d6;padding:14px;border-left:4px solid #d69e2e}</style>
+    content = """<!doctype html><html lang="zh-Hant"><meta charset="utf-8"><title>PongPong 第二輪實驗</title>
+<style>body{{font-family:system-ui,'Microsoft JhengHei';max-width:900px;margin:40px auto;line-height:1.65;color:#20242c}}table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #ccd3df;padding:10px;text-align:left}}th{{background:#edf2fb}}.note{{background:#fff5d6;padding:14px;border-left:4px solid #d69e2e}}</style>
 <h1>PongPong 第二輪跨語言對齊</h1><p>方向：{direction}｜有效 Pivot 訓練錨點：{anchors}｜獨立直接詞典測試：{tests}</p>
 <h2>Cosine 與 CSLS 比較</h2><table><tr><th>方法</th><th>P@1</th><th>P@5</th><th>P@10</th><th>Hubness 偏度</th></tr>{rows}</table>
-<h2>實驗規範</h2><p class=\"note\">Pivot 錨點僅由中英、英日詞典的訓練分割生成；直接日中詞典只作測試。LLM 標記是輔助語義評估，並非黃金標準，應以抽樣人工複核驗證。</p>
+<h2>實驗規範</h2><p class="note">Pivot 錨點僅由中英、英日詞典的訓練分割生成；直接日中詞典只作測試。LLM 標記是輔助語義評估，並非黃金標準，應以抽樣人工複核驗證。</p>
 <p>Run ID: {run_id}</p></html>""".format(
         direction=html.escape(result['direction']), anchors=result['pivot_training_pairs'],
         tests=result['held_out_test_pairs'], rows=''.join(rows), run_id=html.escape(result['run_id']),

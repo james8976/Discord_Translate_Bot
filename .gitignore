@@ -14,6 +14,13 @@ credentials.json
 data/*.db
 logs/*.log
 
+# Research (large embeddings & experiment outputs)
+research/data/*.vec
+research/results/runs/*/
+research/results/latest/*/
+!research/results/runs/.gitkeep
+!research/results/latest/.gitkeep
+
 # IDE
 .vscode/
 .idea/

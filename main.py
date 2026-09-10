@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-PongPong Bot v2.0 — 主程式入口
+PongPong Bot v2.2 — 主程式入口
 載入所有 Cog 模組、初始化資料庫與快取、啟動 Bot
 """
 
@@ -27,6 +27,8 @@ COG_EXTENSIONS = [
     'cogs.flagquiz',
     'cogs.daily_word',
     'cogs.fun',
+    # 'cogs.music',  # ─ 暫時停用（YouTube 在 VM 上被封鎖，改用 Spotify Connect）
+    'cogs.spotify_connect',
 ]
 
 
@@ -66,8 +68,8 @@ async def main():
 
         # 設定 Bot 活動狀態
         activity = discord.Activity(
-            type=discord.ActivityType.watching,
-            name=f'/tr /cc /stock | {len(bot.guilds)} 個伺服器'
+            type=discord.ActivityType.listening,
+            name=f'/tr /weather /spotify | {len(bot.guilds)} 個伺服器'
         )
         await bot.change_presence(activity=activity)
 

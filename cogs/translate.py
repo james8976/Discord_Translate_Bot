@@ -73,14 +73,20 @@ class TranslateCog(commands.Cog, name='翻譯'):
         return embed
 
     # ── Slash Command: /tr ────────────────────────────────
-    @app_commands.command(name='tr', description='翻譯文字到指定語言')
+    @app_commands.command(name='tr', description='翻譯文字到指定語言（不指定語言則使用預設語言）')
     @app_commands.describe(
-        target_lang='目標語言',
-        text='要翻譯的文字'
+        text='要翻譯的文字',
+        target_lang='目標語言（可選，不填則使用 /setlang 設定的預設語言）'
     )
     @app_commands.choices(target_lang=LANG_CHOICES[:25])
-    async def slash_tr(self, interaction: discord.Interaction, target_lang: str, text: str):
+    async def slash_tr(self, interaction: discord.Interaction, text: str, target_lang: str = None):
         await interaction.response.defer()
+
+        # 如果未指定目標語言，使用預設語言
+        if target_lang is None:
+            target_lang = await database.get_user_lang(interaction.user.id)
+            if not target_lang:
+                target_lang = 'zh-TW'  # 最終預設
 
         result, err = await self._translate(text, target_lang)
         if err:

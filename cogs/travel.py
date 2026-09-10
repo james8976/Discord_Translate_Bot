@@ -2,6 +2,7 @@
 """
 PongPong Bot — 旅遊資訊 Cog
 /travel 指令整合天氣、時間、匯率、常用語
+支援中英文城市搜尋（透過 OpenWeatherMap Geocoding API）
 """
 
 import html as html_mod
@@ -10,44 +11,62 @@ import aiohttp
 from discord import app_commands
 from discord.ext import commands
 from datetime import datetime
-import pytz
+import asyncio
 
 import config
 from utils.logger import get_logger
 
 logger = get_logger('travel')
 
-# ── 城市資料庫 ─────────────────────────────────────────────
-# (timezone, country_code, currency, language_code)
-CITY_DATABASE: dict[str, tuple[str, str, str, str]] = {
-    'tokyo':      ('Asia/Tokyo',          'JP', 'JPY', 'ja'),
-    'osaka':      ('Asia/Tokyo',          'JP', 'JPY', 'ja'),
-    'kyoto':      ('Asia/Tokyo',          'JP', 'JPY', 'ja'),
-    'seoul':      ('Asia/Seoul',          'KR', 'KRW', 'ko'),
-    'busan':      ('Asia/Seoul',          'KR', 'KRW', 'ko'),
-    'taipei':     ('Asia/Taipei',         'TW', 'TWD', 'zh-TW'),
-    'kaohsiung':  ('Asia/Taipei',         'TW', 'TWD', 'zh-TW'),
-    'beijing':    ('Asia/Shanghai',       'CN', 'CNY', 'zh-CN'),
-    'shanghai':   ('Asia/Shanghai',       'CN', 'CNY', 'zh-CN'),
-    'hong kong':  ('Asia/Hong_Kong',      'HK', 'HKD', 'zh-TW'),
-    'singapore':  ('Asia/Singapore',      'SG', 'SGD', 'en'),
-    'bangkok':    ('Asia/Bangkok',        'TH', 'THB', 'th'),
-    'new york':   ('America/New_York',    'US', 'USD', 'en'),
-    'los angeles':('America/Los_Angeles', 'US', 'USD', 'en'),
-    'london':     ('Europe/London',       'GB', 'GBP', 'en'),
-    'paris':      ('Europe/Paris',        'FR', 'EUR', 'fr'),
-    'berlin':     ('Europe/Berlin',       'DE', 'EUR', 'de'),
-    'rome':       ('Europe/Rome',         'IT', 'EUR', 'it'),
-    'madrid':     ('Europe/Madrid',       'ES', 'EUR', 'es'),
-    'sydney':     ('Australia/Sydney',    'AU', 'AUD', 'en'),
-    'melbourne':  ('Australia/Melbourne', 'AU', 'AUD', 'en'),
-    'dubai':      ('Asia/Dubai',          'AE', 'AED', 'ar'),
-    'mumbai':     ('Asia/Kolkata',        'IN', 'INR', 'hi'),
-    'hanoi':      ('Asia/Ho_Chi_Minh',    'VN', 'VND', 'vi'),
-    'ho chi minh':('Asia/Ho_Chi_Minh',    'VN', 'VND', 'vi'),
-    'manila':     ('Asia/Manila',         'PH', 'PHP', 'en'),
-    'kuala lumpur':('Asia/Kuala_Lumpur',  'MY', 'MYR', 'ms'),
-    'jakarta':    ('Asia/Jakarta',        'ID', 'IDR', 'id'),
+# ── 國家代碼 → 貨幣 / 語言 對照 ────────────────────────────
+# 覆蓋常見國家，找不到時使用預設值
+COUNTRY_INFO: dict[str, tuple[str, str]] = {
+    # country_code -> (currency, language_code)
+    'JP': ('JPY', 'ja'), 'KR': ('KRW', 'ko'), 'TW': ('TWD', 'zh-TW'),
+    'CN': ('CNY', 'zh-CN'), 'HK': ('HKD', 'zh-TW'), 'MO': ('MOP', 'zh-TW'),
+    'SG': ('SGD', 'en'), 'TH': ('THB', 'th'), 'VN': ('VND', 'vi'),
+    'PH': ('PHP', 'en'), 'MY': ('MYR', 'ms'), 'ID': ('IDR', 'id'),
+    'IN': ('INR', 'hi'), 'AE': ('AED', 'ar'), 'SA': ('SAR', 'ar'),
+    'TR': ('TRY', 'tr'), 'IL': ('ILS', 'he'), 'KH': ('KHR', 'km'),
+    'MM': ('MMK', 'my'), 'LA': ('LAK', 'lo'), 'NP': ('NPR', 'ne'),
+    'BD': ('BDT', 'bn'), 'LK': ('LKR', 'si'), 'PK': ('PKR', 'ur'),
+    'US': ('USD', 'en'), 'CA': ('CAD', 'en'), 'MX': ('MXN', 'es'),
+    'BR': ('BRL', 'pt'), 'AR': ('ARS', 'es'), 'CL': ('CLP', 'es'),
+    'CO': ('COP', 'es'), 'PE': ('PEN', 'es'),
+    'GB': ('GBP', 'en'), 'FR': ('EUR', 'fr'), 'DE': ('EUR', 'de'),
+    'IT': ('EUR', 'it'), 'ES': ('EUR', 'es'), 'PT': ('EUR', 'pt'),
+    'NL': ('EUR', 'nl'), 'BE': ('EUR', 'fr'), 'AT': ('EUR', 'de'),
+    'CH': ('CHF', 'de'), 'SE': ('SEK', 'sv'), 'NO': ('NOK', 'no'),
+    'DK': ('DKK', 'da'), 'FI': ('EUR', 'fi'), 'PL': ('PLN', 'pl'),
+    'CZ': ('CZK', 'cs'), 'HU': ('HUF', 'hu'), 'RO': ('RON', 'ro'),
+    'GR': ('EUR', 'el'), 'RU': ('RUB', 'ru'), 'UA': ('UAH', 'uk'),
+    'IE': ('EUR', 'en'), 'IS': ('ISK', 'is'),
+    'AU': ('AUD', 'en'), 'NZ': ('NZD', 'en'),
+    'EG': ('EGP', 'ar'), 'ZA': ('ZAR', 'en'), 'KE': ('KES', 'sw'),
+    'NG': ('NGN', 'en'), 'MA': ('MAD', 'ar'), 'TN': ('TND', 'ar'),
+    'GH': ('GHS', 'en'), 'ET': ('ETB', 'am'),
+}
+
+# ── 國家代碼 → 時區前綴（用於自動推測）────────────────────
+COUNTRY_TIMEZONE: dict[str, str] = {
+    'JP': 'Asia/Tokyo', 'KR': 'Asia/Seoul', 'TW': 'Asia/Taipei',
+    'CN': 'Asia/Shanghai', 'HK': 'Asia/Hong_Kong', 'SG': 'Asia/Singapore',
+    'TH': 'Asia/Bangkok', 'VN': 'Asia/Ho_Chi_Minh', 'PH': 'Asia/Manila',
+    'MY': 'Asia/Kuala_Lumpur', 'ID': 'Asia/Jakarta', 'IN': 'Asia/Kolkata',
+    'AE': 'Asia/Dubai', 'SA': 'Asia/Riyadh', 'TR': 'Europe/Istanbul',
+    'IL': 'Asia/Jerusalem', 'US': 'America/New_York', 'CA': 'America/Toronto',
+    'MX': 'America/Mexico_City', 'BR': 'America/Sao_Paulo',
+    'AR': 'America/Argentina/Buenos_Aires', 'CL': 'America/Santiago',
+    'GB': 'Europe/London', 'FR': 'Europe/Paris', 'DE': 'Europe/Berlin',
+    'IT': 'Europe/Rome', 'ES': 'Europe/Madrid', 'PT': 'Europe/Lisbon',
+    'NL': 'Europe/Amsterdam', 'CH': 'Europe/Zurich', 'SE': 'Europe/Stockholm',
+    'NO': 'Europe/Oslo', 'DK': 'Europe/Copenhagen', 'FI': 'Europe/Helsinki',
+    'PL': 'Europe/Warsaw', 'CZ': 'Europe/Prague', 'HU': 'Europe/Budapest',
+    'RO': 'Europe/Bucharest', 'GR': 'Europe/Athens', 'RU': 'Europe/Moscow',
+    'UA': 'Europe/Kiev', 'IE': 'Europe/Dublin', 'IS': 'Atlantic/Reykjavik',
+    'AU': 'Australia/Sydney', 'NZ': 'Pacific/Auckland',
+    'EG': 'Africa/Cairo', 'ZA': 'Africa/Johannesburg', 'KE': 'Africa/Nairobi',
+    'NG': 'Africa/Lagos', 'MA': 'Africa/Casablanca',
 }
 
 # 旅遊常用語
@@ -55,23 +74,51 @@ TRAVEL_PHRASES = [
     ('你好', 'Hello'),
     ('謝謝', 'Thank you'),
     ('多少錢？', 'How much?'),
+    ('請問廁所在哪裡？', 'Where is the restroom?'),
+    ('好吃', 'Delicious'),
 ]
 
 
+def country_flag(code: str) -> str:
+    """將國家代碼轉為國旗 emoji"""
+    if not code or len(code) != 2:
+        return '🌍'
+    return ''.join(chr(0x1F1E6 + ord(c) - ord('A')) for c in code.upper())
+
+
 class TravelCog(commands.Cog, name='旅遊'):
-    """旅遊資訊查詢"""
+    """旅遊資訊查詢 — 支援中英文城市搜尋"""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    async def _get_weather_brief(self, city: str) -> str:
-        """取得簡短天氣描述"""
+    async def _geocode(self, query: str) -> dict | None:
+        """用 Geocoding API 解析城市名"""
+        api_key = config.OPENWEATHER_API_KEY
+        if not api_key:
+            return None
+
+        url = 'https://api.openweathermap.org/geo/1.0/direct'
+        params = {'q': query, 'limit': 1, 'appid': api_key}
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json()
+            return data[0] if data else None
+        except Exception as e:
+            logger.error(f'Geocoding 失敗: {e}')
+            return None
+
+    async def _get_weather_brief(self, lat: float, lon: float) -> str:
+        """用經緯度取得簡短天氣描述"""
         api_key = config.OPENWEATHER_API_KEY
         if not api_key:
             return '⚠️ 天氣服務未設定'
 
         url = 'https://api.openweathermap.org/data/2.5/weather'
-        params = {'q': city, 'appid': api_key, 'units': 'metric', 'lang': 'en'}
+        params = {'lat': lat, 'lon': lon, 'appid': api_key, 'units': 'metric', 'lang': 'en'}
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=8)) as resp:
@@ -84,9 +131,11 @@ class TravelCog(commands.Cog, name='旅遊'):
             from cogs.weather import WEATHER_ICONS, WEATHER_DESC_ZH
             icon = WEATHER_ICONS.get(icon_code, '🌍')
             desc_zh = WEATHER_DESC_ZH.get(desc, desc)
-            return f'{icon} {temp:.1f}°C — {desc_zh}'
+            feels = data['main']['feels_like']
+            humidity = data['main']['humidity']
+            return f'{icon} **{temp:.1f}°C** ({desc_zh})\n體感 {feels:.1f}°C ・ 濕度 {humidity}%'
         except Exception as e:
-            logger.warning(f'天氣查詢失敗 ({city}): {e}')
+            logger.warning(f'天氣查詢失敗: {e}')
             return '❌ 天氣查詢失敗'
 
     async def _get_exchange_rate(self, currency: str) -> str:
@@ -110,7 +159,6 @@ class TravelCog(commands.Cog, name='旅遊'):
         """翻譯旅遊常用語到目標語言"""
         client = getattr(self.bot, 'translate_client', None)
         if not client or target_lang in ('zh-TW', 'zh-CN'):
-            # 中文就不用翻了，直接回傳原始
             return [(zh, en) for zh, en in TRAVEL_PHRASES]
 
         results = []
@@ -123,37 +171,41 @@ class TravelCog(commands.Cog, name='旅遊'):
                 results.append((zh, en))
         return results
 
-    @app_commands.command(name='travel', description='查詢目的地旅遊資訊（天氣、時間、匯率、常用語）')
-    @app_commands.describe(city='城市名稱（英文）')
+    @app_commands.command(name='travel', description='查詢目的地旅遊資訊（支援中英文搜尋）')
+    @app_commands.describe(city='城市名稱（如：屏東、Paris、東京、Houston TX）')
     async def slash_travel(self, interaction: discord.Interaction, city: str):
         await interaction.response.defer()
 
-        city_key = city.lower().strip()
-        city_info = CITY_DATABASE.get(city_key)
-
-        if not city_info:
-            # 嘗試模糊比對
-            for key in CITY_DATABASE:
-                if city_key in key or key in city_key:
-                    city_info = CITY_DATABASE[key]
-                    city_key = key
-                    break
-
-        if not city_info:
+        # Step 1: Geocoding
+        loc = await self._geocode(city)
+        if not loc:
             embed = discord.Embed(
-                description=f'❌ 找不到城市「{city}」的旅遊資料。\n\n'
-                            f'**支援的城市：**\n'
-                            + ', '.join(f'`{k.title()}`' for k in sorted(CITY_DATABASE.keys())),
+                description=(
+                    f'❌ 找不到「**{city}**」的位置資訊。\n\n'
+                    '💡 **搜尋提示**：\n'
+                    '> • 中文：`屏東`、`台北`、`東京`、`巴黎`\n'
+                    '> • 英文：`Houston`、`London`、`Sydney`\n'
+                    '> • 精確搜尋：`Houston, TX, US`'
+                ),
                 color=config.COLOR_ERROR,
             )
             await interaction.followup.send(embed=embed)
             return
 
-        tz_name, country_code, currency, lang_code = city_info
+        lat = loc['lat']
+        lon = loc['lon']
+        country_code = loc.get('country', '')
+        state = loc.get('state', '')
+        local_names = loc.get('local_names', {})
+        display_name = local_names.get('zh', '') or local_names.get('ja', '') or loc.get('name', city)
+        eng_name = loc.get('name', '')
 
-        # 並行取得資料
-        import asyncio
-        weather_task = asyncio.create_task(self._get_weather_brief(city_key.title()))
+        # 取得國家資訊
+        currency, lang_code = COUNTRY_INFO.get(country_code, ('USD', 'en'))
+        tz_name = COUNTRY_TIMEZONE.get(country_code, 'UTC')
+
+        # Step 2: 並行取得所有資料
+        weather_task = asyncio.create_task(self._get_weather_brief(lat, lon))
         rate_task = asyncio.create_task(self._get_exchange_rate(currency))
         phrase_task = asyncio.create_task(self._translate_phrases(lang_code))
 
@@ -162,14 +214,26 @@ class TravelCog(commands.Cog, name='旅遊'):
         phrases = await phrase_task
 
         # 當地時間
-        tz = pytz.timezone(tz_name)
-        local_time = datetime.now(tz)
-        time_str = local_time.strftime('%Y-%m-%d %H:%M:%S (%A)')
+        try:
+            import pytz
+            tz = pytz.timezone(tz_name)
+            local_time = datetime.now(tz)
+            time_str = local_time.strftime('%Y-%m-%d %H:%M:%S (%A)')
+        except Exception:
+            time_str = '無法取得當地時間'
 
-        # 組合 Embed
-        flag = config.CURRENCY_FLAGS.get(currency, '🌍')
+        # 組合標題
+        flag = country_flag(country_code)
+        location_parts = [display_name]
+        if state and state != display_name:
+            location_parts.append(state)
+        location_parts.append(country_code)
+        title_str = ', '.join(location_parts)
+        if eng_name and eng_name != display_name:
+            title_str += f' ({eng_name})'
+
         embed = discord.Embed(
-            title=f'✈️ {city_key.title()}, {country_code} {flag}',
+            title=f'✈️ {flag} {title_str}',
             description='旅遊實用資訊一覽',
             color=config.COLOR_PRIMARY,
         )
@@ -188,7 +252,9 @@ class TravelCog(commands.Cog, name='旅遊'):
             inline=False,
         )
 
-        embed.set_footer(text=f'PongPong {config.BOT_VERSION}  •  {datetime.now().strftime("%H:%M:%S")}')
+        embed.set_footer(
+            text=f'📍 {lat:.2f}°N, {lon:.2f}°E  •  PongPong {config.BOT_VERSION}'
+        )
         await interaction.followup.send(embed=embed)
 
 
