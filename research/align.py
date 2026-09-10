@@ -3,6 +3,13 @@ from scipy.linalg import svd
 import pickle
 from typing import Dict, Tuple, Optional
 
+
+def _normalize_rows(values: np.ndarray) -> np.ndarray:
+    """L2-normalize a vector or row matrix without mutating the input."""
+    norms = np.linalg.norm(values, axis=-1, keepdims=True)
+    norms = np.where(norms == 0, 1.0, norms)
+    return values / norms
+
 def procrustes_align(X_src: np.ndarray, Y_tgt: np.ndarray) -> np.ndarray:
     """
     计算正交 Procrustes 对齐的旋转矩阵 W。
@@ -31,8 +38,9 @@ class CrossLingualAligner:
     def __init__(self) -> None:
         """初始化对齐器，旋转矩阵初始为空。"""
         self.W: Optional[np.ndarray] = None
+        self.normalize_input = False
 
-    def train(self, X_src: np.ndarray, Y_tgt: np.ndarray) -> None:
+    def train(self, X_src: np.ndarray, Y_tgt: np.ndarray, normalize: bool = False) -> None:
         """
         训练对齐器，计算并保存旋转矩阵。
         
@@ -40,6 +48,10 @@ class CrossLingualAligner:
             X_src (np.ndarray): 源语言锚点词向量。
             Y_tgt (np.ndarray): 目标语言锚点词向量。
         """
+        self.normalize_input = normalize
+        if normalize:
+            X_src = _normalize_rows(X_src)
+            Y_tgt = _normalize_rows(Y_tgt)
         self.W = procrustes_align(X_src, Y_tgt)
 
     def translate_word(self, vec: np.ndarray) -> np.ndarray:
@@ -57,6 +69,8 @@ class CrossLingualAligner:
         """
         if self.W is None:
             raise ValueError("对齐器尚未训练，请先调用 train 方法。")
+        if self.normalize_input:
+            vec = _normalize_rows(vec)
         return vec @ self.W
 
     def save(self, path: str) -> None:
